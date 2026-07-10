@@ -1,0 +1,36 @@
+name: Maj prix electromenager-compare
+
+on:
+  schedule:
+    - cron: "0 5,7,9,11,13,15,17 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  maj-prix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      - name: Reconstituer le fichier credentials.json depuis le secret
+        run: echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" | base64 -d > credentials.json
+
+      - name: Lancer le script de mise à jour des prix (shard ${{ matrix.shard }})
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: 3
+        run: python sheet_prix.py

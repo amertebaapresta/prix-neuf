@@ -25,6 +25,16 @@ import sys
 import time
 import html
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
+def now_paris():
+    """Heure actuelle à Paris (gère automatiquement heure d'été/hiver),
+    quel que soit le fuseau du serveur qui exécute le script (GitHub
+    Actions tourne en UTC par défaut)."""
+    return datetime.now(PARIS_TZ)
 
 import requests
 import gspread
@@ -115,7 +125,7 @@ EXCLUDE_URL_PATTERNS = ("-liste-", "/recherche", "/marques", "/avis-")
 
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    print(f"[{now_paris().strftime('%H:%M:%S')}] {msg}")
 
 
 # ─── GOOGLE SHEETS ───────────────────────────────────────────────────
@@ -350,7 +360,7 @@ def process_all():
                 url, confiance = find_product_url(type_appareil, marque, modele)
                 if not url:
                     log("  ✗ URL introuvable via la recherche")
-                    updates.append((i, {"Statut": "URL introuvable", "Date MAJ": datetime.now().strftime("%d/%m/%Y %H:%M")}))
+                    updates.append((i, {"Statut": "URL introuvable", "Date MAJ": now_paris().strftime("%d/%m/%Y %H:%M")}))
                     traites += 1
                     time.sleep(DELAY_SECONDS)
                     continue
@@ -366,7 +376,7 @@ def process_all():
 
         if confiance == "approximative":
             statut = f"{statut} — ⚠ modèle exact non confirmé, à vérifier"
-        maj = datetime.now().strftime("%d/%m/%Y %H:%M")
+        maj = now_paris().strftime("%d/%m/%Y %H:%M")
 
         result = {"Lien": url, "Statut": statut, "Date MAJ": maj}
         if prix is not None:

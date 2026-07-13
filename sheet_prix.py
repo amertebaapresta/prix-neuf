@@ -24,6 +24,7 @@ import re
 import sys
 import time
 import html
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -173,7 +174,82 @@ def _slug_matches(url, modele):
     return norm_model in norm_url
 
 
-def _try_search(query):
+# Suffixes de pays/région connus — UNIQUEMENT ceux-ci sont retirés pour un
+# nouvel essai. Contrairement à un découpage générique des dernières lettres,
+# ça évite de tronquer une partie significative d'un vrai nom de modèle
+# (ex: "ADG4620AFD" ne doit jamais devenir "ADG4620" — "AFD" n'est pas un
+# suffixe pays, c'est un appareil différent de "ADG4620FD").
+SUFFIXES_REGIONAUX = [
+    "FR", "EU", "UK", "GB", "DE", "IT", "ES", "PT", "NL", "BE",
+    "CH", "AT", "PL", "INT", "EUR", "US",
+    # Suffixes de marché fréquents chez Samsung notamment (le site affiche
+    # souvent le modèle sans ce suffixe, même s'il fait partie de la
+    # référence officielle complète) :
+    "EF", "EC", "LE",
+]
+
+
+def _strip_regional_suffix(modele):
+    modele_upper = modele.upper()
+    for suf in sorted(SUFFIXES_REGIONAUX, key=len, reverse=True):
+        if modele_upper.endswith(suf) and len(modele) > len(suf) + 3:
+            # +3 : on garde une marge, le cœur du modèle doit rester substantiel
+            return modele[: -len(suf)]
+    return None
+
+
+# Correspondance entre le "Type appareil" du Sheet et le préfixe attendu
+# dans l'URL de la fiche produit. Sert de garde-fou indépendant du modèle :
+# même si un modèle se retrouve par coïncidence dans une URL, on rejette
+# toute page qui n'est manifestement pas la bonne catégorie d'appareil
+# (ex: un réfrigérateur retourné pour une recherche de lave-linge).
+TYPE_VERS_PREFIXES_URL = {
+    "lave-linge": ["lave-linge"],
+    "lave linge": ["lave-linge"],
+    "lave-vaisselle": ["lave-vaisselle"],
+    "lave vaisselle": ["lave-vaisselle"],
+    "refrigerateur": ["refrigerateur"],
+    # Les lave-linge séchants (combinés) sont catalogués comme "lave-linge"
+    # sur le site, même quand Murfy les classe côté "Sèche-linge" — on
+    # accepte donc les deux catégories pour ce type.
+    "seche-linge": ["seche-linge", "lave-linge"],
+    "seche linge": ["seche-linge", "lave-linge"],
+    "congelateur": ["congelateur"],
+    "four": ["four"],  # couvre "four", "four & cuisinière", "four micro-ondes"
+    "cuisiniere": ["four", "cuisiniere"],
+    "micro-ondes": ["four", "micro-ondes"],
+    "hotte": ["hotte"],
+    "cave a vin": ["cave"],
+}
+
+
+def _normaliser(texte):
+    texte = unicodedata.normalize("NFKD", texte)
+    return "".join(c for c in texte if not unicodedata.combining(c)).lower()
+
+
+def _categorie_coherente(url, type_appareil):
+    """Vérifie que la catégorie de la page trouvée correspond au type
+    d'appareil attendu. Si le type est vide/inconnu, on ne bloque pas
+    (mieux vaut laisser la vérification du modèle trancher)."""
+    if not type_appareil:
+        return True
+    type_norm = _normaliser(type_appareil)
+    slug = url.rsplit("/", 1)[-1].lower()
+
+    prefixes_attendus = None
+    for cle, prefixes in TYPE_VERS_PREFIXES_URL.items():
+        if cle in type_norm:
+            prefixes_attendus = prefixes
+            break
+
+    if prefixes_attendus is None:
+        return True  # type non reconnu dans notre mapping, on ne bloque pas
+
+    return any(slug.startswith(p) for p in prefixes_attendus)
+
+
+def _try_search(query, type_appareil=None, modele=None):
     """Une tentative de recherche interne. Retourne (url, mode) ou (None, None)."""
     try:
         r = _post_or_stop(
@@ -200,6 +276,7 @@ def _try_search(query):
         and "electromenager-compare.com" in final_url
         and not _is_recherche_page(final_url)
         and not any(p in final_url for p in EXCLUDE_URL_PATTERNS)
+        and _categorie_coherente(final_url, type_appareil)
     ):
         return final_url, "directe"
 
@@ -210,14 +287,59 @@ def _try_search(query):
         if not _is_recherche_page(c)
         and not any(p in c for p in EXCLUDE_URL_PATTERNS)
         and re.search(r"[A-Z]{2,}", c.rsplit("/", 1)[-1])
+        and _categorie_coherente(c, type_appareil)
     ]
-    if candidates:
-        return candidates[0], "liste"
+    if not candidates:
+        return None, None
 
-    return None, None
+    # Parmi TOUS les candidats de la page (pas juste le premier), on
+    # privilégie celui qui contient réellement le modèle demandé — le
+    # premier lien listé n'est pas forcément le bon.
+    if modele:
+        for c in candidates:
+            if _slug_matches(c, modele):
+                return c, "liste-exact"
+
+    return candidates[0], "liste"
+
 
 
 MARQUES_PLACEHOLDER = {"marque inconnue", "inconnue", "inconnu", "n/a", "na", ""}
+
+
+def _generer_variantes_tiret(modele):
+    """
+    Beaucoup de références comportent en réalité un séparateur (tiret,
+    slash, +) entre un code de base et un dernier segment (souvent la
+    couleur/variante), que Murfy et le site n'écrivent pas toujours de la
+    même façon (ex: modèle Murfy "CSOW4855TWE1S" ↔ référence officielle
+    "CSOW 4855TWE/1-S"). On tente donc d'insérer un tiret à 1, 2 puis 3
+    caractères de la fin, pour aider la recherche interne du site à
+    retrouver la bonne fiche — la comparaison finale ignore de toute façon
+    les tirets, donc ça ne change rien à la validation, juste à la requête.
+    """
+    variantes = []
+    for n in (1, 2, 3):
+        if len(modele) > n + 2:  # garde une base substantielle avant le tiret
+            variantes.append(modele[:-n] + "-" + modele[-n:])
+    return variantes
+
+
+def _sans_prefixe_marque(marque, modele):
+    """
+    Certaines lignes ont, par erreur de saisie, le début du nom de la
+    marque collé au modèle (ex: marque "Valberg", modèle "VAL14C42AXMISC"
+    alors que la vraie référence est juste "14C42AXMISC"). On tente de
+    retirer ce préfixe s'il correspond bien au début du nom de marque.
+    """
+    marque_norm = re.sub(r"[^A-Za-z]", "", marque).upper()
+    modele_upper = modele.upper()
+    for taille in (4, 3):
+        if len(marque_norm) >= taille and len(modele) > taille + 3:
+            prefixe = marque_norm[:taille]
+            if modele_upper.startswith(prefixe):
+                return modele[taille:]
+    return None
 
 
 def find_product_url(type_appareil, marque, modele):
@@ -227,22 +349,65 @@ def find_product_url(type_appareil, marque, modele):
     Vérifie que le modèle demandé apparaît vraiment dans l'URL retenue ;
     si le site est retombé sur une page de résultats générique (ex: à
     cause d'un suffixe régional comme "FR"), retente sans ce suffixe.
+    En dernier recours, essaie d'insérer un tiret vers la fin du modèle
+    (cas des variantes couleur séparées par "-", "/" ou "+" sur le site).
     Retourne (url, confiance) avec confiance = "haute" ou "approximative".
+
+    IMPORTANT : "haute" confiance signifie toujours que le modèle ORIGINAL
+    complet (tel que saisi) a été retrouvé tel quel dans l'URL — jamais une
+    version tronquée. Une retouche du modèle (suffixe retiré) qui donnerait
+    un match ne peut renvoyer que "approximative", sauf si ce suffixe fait
+    partie d'une liste connue de codes pays/région (auquel cas les deux
+    variantes désignent le même produit physique).
+
+    NOTE : un fallback DuckDuckGo puis Google Custom Search ont été testés
+    puis retirés — tous deux bloquent les requêtes automatisées (anti-bot
+    pour DuckDuckGo, accès fermé aux nouveaux projets pour l'API Google).
     """
     _init_session()
     marque_effective = "" if marque.strip().lower() in MARQUES_PLACEHOLDER else marque
     query = f"{marque_effective} {modele}".strip()
-    url, mode = _try_search(query)
+    url, mode = _try_search(query, type_appareil, modele)
 
     if url and _slug_matches(url, modele):
         return url, "haute"
 
-    stripped = re.sub(r"[A-Za-z]{1,3}$", "", modele)
-    if stripped and stripped != modele:
-        url2, mode2 = _try_search(f"{marque_effective} {stripped}".strip())
-        if url2:
-            confiance = "haute" if _slug_matches(url2, stripped) else "approximative"
-            return url2, confiance
+    # On ne retire QUE des suffixes de pays/région reconnus — jamais un
+    # découpage aveugle des dernières lettres, qui pourrait retirer une
+    # partie significative du vrai nom du modèle (ex: "ADG4620AFD" tronqué
+    # en "ADG4620" a déjà fait confondre deux appareils différents).
+    stripped = _strip_regional_suffix(modele)
+    if stripped:
+        time.sleep(2)  # petite pause de sécurité entre deux tentatives
+        url2, mode2 = _try_search(f"{marque_effective} {stripped}".strip(), type_appareil, stripped)
+        # On valide contre le modèle ORIGINAL en priorité (le suffixe pays
+        # peut aussi être absent de l'URL) ; à défaut, contre le modèle
+        # tronqué — mais dans ce dernier cas, jamais "haute" les yeux fermés.
+        if url2 and _slug_matches(url2, modele):
+            return url2, "haute"
+        if url2 and _slug_matches(url2, stripped):
+            return url2, "haute"  # suffixe pays confirmé : même produit
+    else:
+        url2 = None
+
+    # Tentative : le modèle contient-il le début du nom de marque collé
+    # par erreur (ex: "VAL14C42AXMISC" pour la marque "Valberg") ?
+    sans_prefixe = _sans_prefixe_marque(marque, modele)
+    if sans_prefixe:
+        time.sleep(2)
+        url_sp, mode_sp = _try_search(f"{marque_effective} {sans_prefixe}".strip(), type_appareil, sans_prefixe)
+        if url_sp and _slug_matches(url_sp, sans_prefixe):
+            return url_sp, "haute"
+
+    # Dernier recours : tenter d'insérer un tiret vers la fin du modèle.
+    for variante in _generer_variantes_tiret(modele):
+        time.sleep(2)  # petite pause de sécurité entre deux tentatives
+        url3, mode3 = _try_search(f"{marque_effective} {variante}".strip(), type_appareil, modele)
+        if url3 and _slug_matches(url3, modele):
+            return url3, "haute"
+
+    if url2:
+        return url2, "approximative"
 
     if url:
         return url, "approximative"
@@ -355,7 +520,15 @@ def process_all():
 
         try:
             url = get("Lien")
-            confiance = "haute"  # une URL déjà présente dans le Sheet est considérée fiable
+            confiance = None
+            if url:
+                if _slug_matches(url, modele):
+                    confiance = "haute"
+                else:
+                    log(f"  ⚠ Lien existant ne correspond pas au modèle "
+                        f"'{modele}' — nouvelle recherche")
+                    url = None  # on ne lui fait plus confiance, on refait une recherche
+
             if not url:
                 url, confiance = find_product_url(type_appareil, marque, modele)
                 if not url:

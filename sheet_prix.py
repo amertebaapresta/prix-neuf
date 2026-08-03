@@ -555,7 +555,7 @@ def process_all():
 
         prix_existant = get("Price Scrapping")
         if prix_existant and not FORCE_REFRESH_ALL:
-            continue  # déjà traité
+            continue  # déjà traité (y compris les "Non trouvé")
 
         # Cette ligne est un candidat à traiter : on décide si c'est à CE
         # job (shard) de s'en occuper
@@ -599,7 +599,20 @@ def process_all():
             break
 
         if confiance == "approximative":
-            statut = f"{statut} — ⚠ modèle exact non confirmé, à vérifier"
+            # Lien non fiable — on n'écrit rien de trompeur dans le Sheet
+            maj = now_paris().strftime("%d/%m/%Y %H:%M")
+            result = {
+                "Price Scrapping": "Non trouvé",
+                "Lien": "Non trouvé",
+                "Statut": "⚠ Modèle exact non confirmé — à vérifier manuellement",
+                "Date MAJ": maj,
+            }
+            log(f"  ⚠ Confiance approximative — Non trouvé écrit dans le Sheet")
+            updates.append((i, result))
+            traites += 1
+            time.sleep(DELAY_SECONDS)
+            continue
+
         maj = now_paris().strftime("%d/%m/%Y %H:%M")
 
         result = {"Lien": url, "Statut": statut, "Date MAJ": maj}

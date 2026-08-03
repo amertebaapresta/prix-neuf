@@ -306,6 +306,49 @@ def _try_search(query, type_appareil=None, modele=None):
 
 MARQUES_PLACEHOLDER = {"marque inconnue", "inconnue", "inconnu", "n/a", "na", ""}
 
+# Mots-clés qui signalent une référence inutilisable (saisie incomplète,
+# description générique, etc.) — on n'essaie même pas de chercher
+MODELES_INUTILISABLES = {"vde", "non renseignée", "non renseigne", ""}
+
+
+def _nettoyer_modele(marque, modele):
+    """
+    Applique les mêmes règles de nettoyage que la requête SQL Murfy, pour
+    normaliser la référence avant de chercher sur le site :
+
+    - Supprime tout ce qui suit '/' (Samsung : WW80T552DAWS3 → WW80T552DAW)
+    - Pour Siemens : supprime aussi après ',' puis les 2-3 chiffres finaux
+    - Pour Vedette : idem Siemens (2 chiffres finaux)
+    - Pour Bosch : garde seulement les 10 premiers caractères
+    - Retire le mot "EUROSAV" où qu'il apparaisse (Valberg notamment)
+    - Retire les espaces résiduels
+    """
+    if not modele:
+        return modele
+
+    marque_upper = (marque or "").upper()
+    m = modele.strip()
+
+    # Suppression du mot EUROSAV (toutes marques confondues)
+    m = re.sub(r"(?i)EUROSAV", "", m).strip()
+
+    # Nettoyages spécifiques par marque
+    if "SAMSUNG" in marque_upper:
+        m = re.sub(r"/.*$", "", m).strip()
+
+    elif "SIEMENS" in marque_upper:
+        m = re.sub(r"[/,].*$", "", m).strip()
+        m = re.sub(r"\d{2,3}$", "", m).strip()
+
+    elif "VEDETTE" in marque_upper:
+        m = re.sub(r"[/,].*$", "", m).strip()
+        m = re.sub(r"\d{2}$", "", m).strip()
+
+    elif "BOSCH" in marque_upper:
+        m = m[:10]
+
+    return m if m else modele  # si nettoyage vide, on garde l'original
+
 
 def _generer_variantes_tiret(modele):
     """
@@ -366,33 +409,38 @@ def find_product_url(type_appareil, marque, modele):
     """
     _init_session()
     marque_effective = "" if marque.strip().lower() in MARQUES_PLACEHOLDER else marque
-    query = f"{marque_effective} {modele}".strip()
-    url, mode = _try_search(query, type_appareil, modele)
 
-    if url and _slug_matches(url, modele):
+    # Nettoyage de la référence selon les règles Murfy (réplique la logique
+    # SQL utilisée en aval, pour normaliser avant de chercher sur le site)
+    modele_clean = _nettoyer_modele(marque, modele)
+    if modele_clean.lower() in MODELES_INUTILISABLES:
+        log(f"  ⚠ Référence inutilisable après nettoyage ('{modele}' → '{modele_clean}')")
+        return None, None
+
+    if modele_clean != modele:
+        log(f"  → Référence nettoyée : '{modele}' → '{modele_clean}'")
+
+    query = f"{marque_effective} {modele_clean}".strip()
+    url, mode = _try_search(query, type_appareil, modele_clean)
+
+    if url and _slug_matches(url, modele_clean):
         return url, "haute"
 
-    # On ne retire QUE des suffixes de pays/région reconnus — jamais un
-    # découpage aveugle des dernières lettres, qui pourrait retirer une
-    # partie significative du vrai nom du modèle (ex: "ADG4620AFD" tronqué
-    # en "ADG4620" a déjà fait confondre deux appareils différents).
-    stripped = _strip_regional_suffix(modele)
+    # On ne retire QUE des suffixes de pays/région reconnus
+    stripped = _strip_regional_suffix(modele_clean)
     if stripped:
-        time.sleep(2)  # petite pause de sécurité entre deux tentatives
+        time.sleep(2)
         url2, mode2 = _try_search(f"{marque_effective} {stripped}".strip(), type_appareil, stripped)
-        # On valide contre le modèle ORIGINAL en priorité (le suffixe pays
-        # peut aussi être absent de l'URL) ; à défaut, contre le modèle
-        # tronqué — mais dans ce dernier cas, jamais "haute" les yeux fermés.
-        if url2 and _slug_matches(url2, modele):
+        if url2 and _slug_matches(url2, modele_clean):
             return url2, "haute"
         if url2 and _slug_matches(url2, stripped):
-            return url2, "haute"  # suffixe pays confirmé : même produit
+            return url2, "haute"
     else:
         url2 = None
 
     # Tentative : le modèle contient-il le début du nom de marque collé
     # par erreur (ex: "VAL14C42AXMISC" pour la marque "Valberg") ?
-    sans_prefixe = _sans_prefixe_marque(marque, modele)
+    sans_prefixe = _sans_prefixe_marque(marque, modele_clean)
     if sans_prefixe:
         time.sleep(2)
         url_sp, mode_sp = _try_search(f"{marque_effective} {sans_prefixe}".strip(), type_appareil, sans_prefixe)
@@ -400,10 +448,10 @@ def find_product_url(type_appareil, marque, modele):
             return url_sp, "haute"
 
     # Dernier recours : tenter d'insérer un tiret vers la fin du modèle.
-    for variante in _generer_variantes_tiret(modele):
-        time.sleep(2)  # petite pause de sécurité entre deux tentatives
-        url3, mode3 = _try_search(f"{marque_effective} {variante}".strip(), type_appareil, modele)
-        if url3 and _slug_matches(url3, modele):
+    for variante in _generer_variantes_tiret(modele_clean):
+        time.sleep(2)
+        url3, mode3 = _try_search(f"{marque_effective} {variante}".strip(), type_appareil, modele_clean)
+        if url3 and _slug_matches(url3, modele_clean):
             return url3, "haute"
 
     if url2:
@@ -519,15 +567,18 @@ def process_all():
         log(f"Ligne {i}: {type_appareil} {marque} {modele}")
 
         try:
+            # Nettoyage de la référence avant toute vérification ou recherche
+            modele_clean = _nettoyer_modele(marque, modele)
+
             url = get("Lien")
             confiance = None
             if url:
-                if _slug_matches(url, modele):
+                if _slug_matches(url, modele_clean) or _slug_matches(url, modele):
                     confiance = "haute"
                 else:
                     log(f"  ⚠ Lien existant ne correspond pas au modèle "
-                        f"'{modele}' — nouvelle recherche")
-                    url = None  # on ne lui fait plus confiance, on refait une recherche
+                        f"'{modele_clean}' — nouvelle recherche")
+                    url = None
 
             if not url:
                 url, confiance = find_product_url(type_appareil, marque, modele)

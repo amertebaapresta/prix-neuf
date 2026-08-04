@@ -1,47 +1,37 @@
 """
 Murfy — Scraper Prix Neuf + Fiche Technique
 ============================================
-Sheet ID  : 1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0
+Sheet ID  : via secret SHEET_ID_FICHE
 Onglet    : TEST
 Colonnes  : B=Type | C=Marque | D=Modèle
             E=Prix neuf | F=Lien | G=Fiche technique | H=Dimensions
-
-GitHub Actions : 3 shards parallèles (IP différentes)
 """
 
-import os
-import re
-import sys
-import time
-import json
-import html
-import unicodedata
+import os, re, sys, time, html, unicodedata
 from datetime import datetime
 
-import requests
-import gspread
+import requests, gspread
 from google.oauth2.service_account import Credentials
 
-# ── Config ───────────────────────────────────────────────────────────────────
-SHEET_ID        = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
-SHEET_TAB       = "TEST"
-BATCH_LIMIT     = int(os.environ.get("BATCH_LIMIT", "5"))    # appareils par shard/run
-DELAY_SECONDS   = int(os.environ.get("DELAY_SECONDS", "20")) # pause entre appareils
-SHARD_INDEX     = int(os.environ.get("SHARD_INDEX", "0"))    # 0, 1 ou 2
-SHARD_COUNT     = int(os.environ.get("SHARD_COUNT", "1"))    # 3 en prod
-CREDS_FILE      = "credentials.json"
+# ── Config ────────────────────────────────────────────────────────────────────
+SHEET_ID      = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
+SHEET_TAB     = "TEST"
+BATCH_LIMIT   = int(os.environ.get("BATCH_LIMIT",    "5"))
+DELAY_SECONDS = int(os.environ.get("DELAY_SECONDS", "20"))
+SHARD_INDEX   = int(os.environ.get("SHARD_INDEX",   "0"))
+SHARD_COUNT   = int(os.environ.get("SHARD_COUNT",   "1"))
+CREDS_FILE    = "credentials.json"
 
-# Colonnes du sheet (index 0-based par rapport à la colonne B=0)
-COL_TYPE    = 0  # B
-COL_MARQUE  = 1  # C
-COL_MODELE  = 2  # D
-COL_PRIX    = 3  # E
-COL_LIEN    = 4  # F
-COL_FICHE   = 5  # G
-COL_DIM     = 6  # H
+# Colonnes (index Sheet 1-based)
+COL_TYPE  = 2  # B
+COL_MARQUE= 3  # C
+COL_MODELE= 4  # D
+COL_PRIX  = 5  # E
+COL_LIEN  = 6  # F
+COL_FICHE = 7  # G
+COL_DIM   = 8  # H
 
-# ── Constantes scraping ───────────────────────────────────────────────────────
-BASE_URL = "https://www.electromenager-compare.com"
+BASE_URL   = "https://www.electromenager-compare.com"
 SEARCH_URL = f"{BASE_URL}/index.php"
 
 HEADERS = {
@@ -51,27 +41,18 @@ HEADERS = {
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9",
     "Referer": BASE_URL,
 }
 
-URL_PATTERN = re.compile(
-    r'href="((?:https?://(?:www\.)?electromenager-compare\.com/)?'
-    r'[a-z][a-z0-9\-]*-[A-Za-z0-9][A-Za-z0-9\-]*\.htm)"',
-    re.IGNORECASE,
-)
-
 SESSION = None
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-
 class RateLimitError(Exception):
     pass
-
 
 def _init_session():
     global SESSION
@@ -80,88 +61,71 @@ def _init_session():
         try:
             r = SESSION.get(BASE_URL, headers=HEADERS, timeout=15)
             if r.status_code == 403:
-                raise RateLimitError("403 dès l'initialisation")
-            log(f"Session initialisée (HTTP {r.status_code})")
+                raise RateLimitError("403 à l'init")
+            log(f"Session OK (HTTP {r.status_code})")
         except RateLimitError:
             raise
         except Exception as e:
-            log(f"Avertissement init session : {e}")
+            log(f"Init session : {e}")
 
-
-def _get(url, **kwargs):
-    r = SESSION.get(url, headers=HEADERS, timeout=15, **kwargs)
+def _get(url):
+    r = SESSION.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
     if r.status_code == 403:
-        raise RateLimitError(f"403 sur GET {url}")
+        raise RateLimitError(f"403 GET {url}")
     return r
 
-
-def _post(url, **kwargs):
-    r = SESSION.post(url, headers=HEADERS, timeout=15, **kwargs)
+def _post(url, data):
+    r = SESSION.post(url, headers=HEADERS, data=data, timeout=15, allow_redirects=True)
     if r.status_code == 403:
-        raise RateLimitError(f"403 sur POST {url}")
+        raise RateLimitError(f"403 POST {url}")
     return r
 
+def _decode(r):
+    """Décode la réponse en tenant compte de l'encodage iso-8859-1 du site."""
+    try:
+        return r.content.decode("iso-8859-1")
+    except Exception:
+        return r.text
 
-def _normaliser(texte):
-    t = unicodedata.normalize("NFKD", texte)
+def _norm(t):
+    t = unicodedata.normalize("NFKD", t)
     return "".join(c for c in t if not unicodedata.combining(c)).lower()
 
-
-# ── Nettoyage du modèle (réplique logique SQL Murfy) ─────────────────────────
-MODELES_INUTILISABLES = {"vde", "non renseignée", "non renseigne", ""}
+# ── Nettoyage modèle (logique SQL Murfy) ─────────────────────────────────────
+MODELES_INUTILISABLES = {"vde", "non renseignee", "non renseigne", ""}
 MARQUES_PLACEHOLDER   = {"marque inconnue", "inconnue", "inconnu", "n/a", "na", ""}
-
-SUFFIXES_REGIONAUX = [
-    "FR", "EU", "UK", "GB", "DE", "IT", "ES", "PT", "NL", "BE",
-    "CH", "AT", "PL", "INT", "EUR", "EF", "EC", "LE", "US",
-]
-
+SUFFIXES_REGIONAUX    = ["FR","EU","UK","GB","DE","IT","ES","PT","NL","BE",
+                         "CH","AT","PL","INT","EUR","EF","EC","LE","US"]
 
 def _nettoyer_modele(marque, modele):
-    if not modele:
-        return modele
-    marque_upper = (marque or "").upper()
-    m = modele.strip()
-    m = re.sub(r"(?i)EUROSAV", "", m).strip()
-    if "SAMSUNG" in marque_upper:
-        m = re.sub(r"/.*$", "", m).strip()
-    elif "SIEMENS" in marque_upper:
-        m = re.sub(r"[/,].*$", "", m).strip()
-        m = re.sub(r"\d{2,3}$", "", m).strip()
-    elif "VEDETTE" in marque_upper:
-        m = re.sub(r"[/,].*$", "", m).strip()
-        m = re.sub(r"\d{2}$", "", m).strip()
-    elif "BOSCH" in marque_upper:
-        m = m[:10]
+    if not modele: return modele
+    mu = (marque or "").upper()
+    m  = modele.strip()
+    m  = re.sub(r"(?i)EUROSAV", "", m).strip()
+    if "SAMSUNG"  in mu: m = re.sub(r"/.*$",    "", m).strip()
+    elif "SIEMENS" in mu: m = re.sub(r"[/,].*$", "", m).strip(); m = re.sub(r"\d{2,3}$", "", m).strip()
+    elif "VEDETTE" in mu: m = re.sub(r"[/,].*$", "", m).strip(); m = re.sub(r"\d{2}$",   "", m).strip()
+    elif "BOSCH"   in mu: m = m[:10]
     return m if m else modele
 
-
-def _strip_regional_suffix(modele):
+def _strip_suffix(modele):
     mu = modele.upper()
-    for suf in sorted(SUFFIXES_REGIONAUX, key=len, reverse=True):
-        if mu.endswith(suf) and len(modele) > len(suf) + 3:
-            return modele[:-len(suf)]
+    for s in sorted(SUFFIXES_REGIONAUX, key=len, reverse=True):
+        if mu.endswith(s) and len(modele) > len(s)+3:
+            return modele[:-len(s)]
     return None
 
-
-def _sans_prefixe_marque(marque, modele):
-    prefix = re.sub(r"[^A-Za-z0-9]", "", marque).upper()[:3]
-    mu = modele.upper()
-    if mu.startswith(prefix) and len(modele) > len(prefix) + 2:
-        return modele[len(prefix):]
+def _sans_prefixe(marque, modele):
+    p = re.sub(r"[^A-Za-z0-9]","",marque).upper()[:3]
+    if modele.upper().startswith(p) and len(modele)>len(p)+2:
+        return modele[len(p):]
     return None
 
+def _variantes_tiret(modele):
+    return [modele[:-n]+"-"+modele[-n:] for n in range(1,4) if len(modele)>n]
 
-def _generer_variantes_tiret(modele):
-    variants = []
-    for n in range(1, 4):
-        if len(modele) > n:
-            variants.append(modele[:-n] + "-" + modele[-n:])
-    return variants
-
-
-# ── Cohérence catégorie URL ───────────────────────────────────────────────────
-TYPE_VERS_PREFIXES_URL = {
+# ── Cohérence catégorie ───────────────────────────────────────────────────────
+TYPE_PREFIXES = {
     "lave-linge":     ["lave-linge"],
     "lave linge":     ["lave-linge"],
     "lave-vaisselle": ["lave-vaisselle"],
@@ -175,329 +139,290 @@ TYPE_VERS_PREFIXES_URL = {
     "congelateur":    ["congelateur"],
     "congélateur":    ["congelateur"],
     "four":           ["four"],
-    "cuisiniere":     ["four", "cuisiniere"],
-    "cuisinière":     ["four", "cuisiniere"],
-    "micro-ondes":    ["four", "micro-ondes"],
-    "hotte":          ["hotte"],
-    "cave a vin":     ["cave"],
+    "cuisiniere":     ["four","cuisiniere"],
+    "cuisinière":     ["four","cuisiniere"],
+    "micro-ondes":    ["four","micro-ondes"],
 }
 
-
-def _categorie_coherente(url, type_appareil):
-    if not type_appareil:
-        return True
-    type_norm = _normaliser(type_appareil)
-    slug = url.rsplit("/", 1)[-1].lower()
-    for cle, prefixes in TYPE_VERS_PREFIXES_URL.items():
-        if cle in type_norm:
+def _coherente(url, type_app):
+    if not type_app: return True
+    tn   = _norm(type_app)
+    slug = url.rsplit("/",1)[-1].lower()
+    for cle, prefixes in TYPE_PREFIXES.items():
+        if cle in tn:
             return any(slug.startswith(p) for p in prefixes)
     return True
 
+def _slug_match(url, modele):
+    nm = re.sub(r"[\s\-]","", modele).upper()
+    nu = re.sub(r"[\s\-]","", url).upper()
+    return nm in nu
 
-def _slug_matches(url, modele):
-    norm_m = re.sub(r"[\s\-]", "", modele).upper()
-    norm_u = re.sub(r"[\s\-]", "", url).upper()
-    return norm_m in norm_u
+# ── Recherche URL ─────────────────────────────────────────────────────────────
+URL_PAT = re.compile(
+    r'href="((?:https?://(?:www\.)?electromenager-compare\.com/)?'
+    r'[a-z][a-z0-9\-]*-[A-Za-z0-9][A-Za-z0-9\-]*\.htm)"',
+    re.IGNORECASE
+)
 
-
-# ── Recherche URL produit ─────────────────────────────────────────────────────
-def _try_search(query, type_appareil=None, modele_ref=None):
-    """Recherche interne POST → retourne (url, mode) ou (None, None)."""
+def _try_search(query, type_app=None, ref=None):
     try:
-        r = _post(
-            SEARCH_URL,
-            data={"action": "sbtsrch", "search": query},
-            allow_redirects=True,
-        )
+        r = _post(SEARCH_URL, {"action":"sbtsrch","search":query})
     except RateLimitError:
         raise
     except Exception as e:
-        log(f"    Erreur réseau recherche : {e}")
-        return None, None
+        log(f"  Erreur recherche : {e}"); return None
 
-    page_html = html.unescape(r.text)
-    candidates = []
-    for m in URL_PATTERN.finditer(page_html):
+    page = _decode(r)
+    ref  = ref or query
+
+    for m in URL_PAT.finditer(page):
         href = m.group(1)
         if not href.startswith("http"):
-            href = BASE_URL + "/" + href.lstrip("/")
-        last = href.rsplit("/", 1)[-1]
-        if last.startswith("recherche-"):
+            href = BASE_URL+"/"+href.lstrip("/")
+        if href.rsplit("/",1)[-1].startswith("recherche-"):
             continue
-        if type_appareil and not _categorie_coherente(href, type_appareil):
+        if type_app and not _coherente(href, type_app):
             continue
-        candidates.append(href)
+        if _slug_match(href, ref):
+            return href
+    return None
 
-    if not candidates:
-        return None, None
-
-    ref = modele_ref or query
-    # Chercher le meilleur candidat (match exact du modèle dans l'URL)
-    for c in candidates:
-        if _slug_matches(c, ref):
-            return c, "search"
-
-    return None, None
-
-
-def find_product_url(type_appareil, marque, modele):
-    """Stratégie de recherche multi-passes. Retourne (url, confiance)."""
+def find_url(type_app, marque, modele):
     _init_session()
-    marque_eff = "" if marque.strip().lower() in MARQUES_PLACEHOLDER else marque
-    modele_clean = _nettoyer_modele(marque, modele)
-
-    if modele_clean.lower() in MODELES_INUTILISABLES:
-        return None, None
+    me = "" if marque.strip().lower() in MARQUES_PLACEHOLDER else marque
+    mc = _nettoyer_modele(marque, modele)
+    if mc.lower() in MODELES_INUTILISABLES:
+        return None
 
     # Passe 1 : marque + modèle nettoyé
-    url, _ = _try_search(f"{marque_eff} {modele_clean}".strip(), type_appareil, modele_clean)
-    if url:
-        return url, "haute"
-
+    url = _try_search(f"{me} {mc}".strip(), type_app, mc)
+    if url: return url
     time.sleep(2)
 
     # Passe 2 : modèle seul
-    url, _ = _try_search(modele_clean, type_appareil, modele_clean)
-    if url:
-        return url, "haute"
-
+    url = _try_search(mc, type_app, mc)
+    if url: return url
     time.sleep(2)
 
     # Passe 3 : sans suffixe régional
-    sans_suf = _strip_regional_suffix(modele_clean)
-    if sans_suf:
-        url, _ = _try_search(f"{marque_eff} {sans_suf}".strip(), type_appareil, sans_suf)
-        if url and _slug_matches(url, sans_suf):
-            return url, "haute"
+    ss = _strip_suffix(mc)
+    if ss:
+        url = _try_search(f"{me} {ss}".strip(), type_app, ss)
+        if url and _slug_match(url, ss): return url
         time.sleep(2)
 
     # Passe 4 : sans préfixe marque
-    sans_pref = _sans_prefixe_marque(marque, modele_clean)
-    if sans_pref:
-        url, _ = _try_search(f"{marque_eff} {sans_pref}".strip(), type_appareil, sans_pref)
-        if url and _slug_matches(url, sans_pref):
-            return url, "haute"
+    sp = _sans_prefixe(marque, mc)
+    if sp:
+        url = _try_search(f"{me} {sp}".strip(), type_app, sp)
+        if url and _slug_match(url, sp): return url
         time.sleep(2)
 
-    # Passe 5 : variantes avec tiret
-    for variante in _generer_variantes_tiret(modele_clean):
-        url, _ = _try_search(f"{marque_eff} {variante}".strip(), type_appareil, modele_clean)
-        if url and _slug_matches(url, modele_clean):
-            return url, "haute"
+    # Passe 5 : variantes tiret
+    for v in _variantes_tiret(mc):
+        url = _try_search(f"{me} {v}".strip(), type_app, mc)
+        if url and _slug_match(url, mc): return url
         time.sleep(2)
 
-    return None, None
+    return None
 
-
-# ── Scraping prix depuis page produit ────────────────────────────────────────
+# ── Prix ──────────────────────────────────────────────────────────────────────
 def fetch_prix(url):
-    """Retourne (prix_str, ok) depuis la page produit."""
     try:
-        r = _get(url, allow_redirects=True)
+        r    = _get(url)
+        page = _decode(r)
     except RateLimitError:
         raise
     except Exception as e:
-        return None, f"Erreur réseau: {e}"
+        return None
 
-    if r.status_code != 200:
-        return None, f"HTTP {r.status_code}"
-
-    page = html.unescape(r.text)
-
-    # Patterns prix (du plus précis au plus général)
-    for pattern in [
-        r'class="[^"]*prix[^"]*"[^>]*>\s*([0-9][0-9 ]*[,\.][0-9]{2})\s*€',
-        r'([0-9][0-9 ]*[,\.][0-9]{2})\s*€',
+    # Prix le plus bas affiché en haut de page (ex: "475.35 €" ou "475,35 €")
+    for pat in [
+        r'A PARTIR DE\s*[\r\n\s]*([0-9][0-9 ]*[,\.][0-9]{2})\s*',
+        r'([0-9][0-9 ]*[,\.][0-9]{2})\s*\xe2\x82\xac',  # € utf8
         r'([0-9][0-9 ]*[,\.][0-9]{2})\s*&euro;',
+        r'([0-9][0-9 ]*[,\.][0-9]{2})\s*€',
+        r'([0-9][0-9 ]*[,\.][0-9]{2})\s*&#8364;',
     ]:
-        m = re.search(pattern, page, re.IGNORECASE)
+        m = re.search(pat, page, re.IGNORECASE)
         if m:
-            prix = m.group(1).replace(" ", "").replace(".", ",") + " €"
-            return prix, "ok"
+            return m.group(1).replace(" ","").replace(".",",") + " €"
+    return None
 
-    return None, "Prix non trouvé dans la page"
-
-
-# ── Scraping fiche technique ──────────────────────────────────────────────────
-def fetch_fiche_technique(url, type_appareil):
+# ── Fiche technique ───────────────────────────────────────────────────────────
+def fetch_fiche(url, type_app):
     """
-    Retourne (fiche_str, dimensions_str) depuis la page produit.
-    fiche_str : texte multiligne lisible, style Murfy
+    Retourne (fiche_str, dimensions_str).
+    La page est en iso-8859-1 — on décode correctement avant de parser.
+    Structure de la page :
+      - "Capacité de chargement : X kg"
+      - "Niveau sonore : X dB(A)"
+      - "Classe énergie : A++"
+      - "Dimensions déballé : 850 x 596 x 650 mm (HxLxP)"
+      - "Poids déballé : 46.01 kg"
     """
     try:
-        r = _get(url, allow_redirects=True)
+        r    = _get(url)
+        page = _decode(r)
     except RateLimitError:
         raise
     except Exception as e:
         return "Erreur réseau", "Non trouvé"
 
-    if r.status_code != 200:
-        return f"HTTP {r.status_code}", "Non trouvé"
+    tn    = _norm(type_app or "")
+    lines = []
 
-    page = html.unescape(r.text)
-    type_norm = _normaliser(type_appareil or "")
-
-    lignes = []
-
-    # ── Poids ──────────────────────────────────────────────────────────────
-    for p in [
-        r'[Pp]oids\s*(?:\([^)]*\))?\s*:\s*</?\w[^>]*>?\s*([0-9]+[,.]?[0-9]*)\s*(?:kg)?',
-        r'[Pp]oids[^:]*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
-    ]:
-        m = re.search(p, page)
-        if m:
-            lignes.append(f"Poids : {m.group(1).strip()} kg")
-            break
+    # ── Poids ─────────────────────────────────────────────────────────────
+    m = re.search(r'Poids d.ball.\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg', page, re.IGNORECASE)
+    if m: lines.append(f"Poids : {m.group(1)} kg")
 
     # ── Champs selon catégorie ─────────────────────────────────────────────
-    if "lave-linge" in type_norm or "lave linge" in type_norm:
-        _extract(page, lignes, "Capacité", [
-            r'[Cc]apacit[eé][^:]*:\s*<?[^>]*>?\s*([0-9]+[,.]?[0-9]*)\s*kg',
+    if "lave-linge" in tn or "lave linge" in tn:
+        _add(page, lines, "Capacité", [
+            r'Capacit. de chargement\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
+            r'Capacit.\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
         ], "kg")
-        _extract(page, lignes, "Essorage", [
-            r'[Ee]ssorage[^:]*:\s*<?[^>]*>?\s*([0-9 ]+)\s*(?:tr/?min|trs)',
-            r'[Vv]itesse[^:]*:\s*([0-9 ]+)\s*tr/?min',
+        _add(page, lines, "Essorage", [
+            r'Essorage\s*:\s*([0-9 ]+)\s*(?:tr/min|trs)',
+            r'Vitesse d.essorage\s*:\s*([0-9 ]+)\s*tr',
         ], "tr/min")
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Niveau sonore", [
-            r'[Nn]iveau sonore[^:]*:\s*<?[^>]*>?\s*([0-9]+)\s*(?:dB)?',
-            r'[Bb]ruit[^:]*:\s*([0-9]+)\s*dB',
+        _energie(page, lines)
+        _add(page, lines, "Niveau sonore", [
+            r'Niveau sonore\s*:\s*([0-9]+)\s*dB',
         ], "dB")
 
-    elif "lave-vaisselle" in type_norm or "lave vaisselle" in type_norm:
-        _extract(page, lignes, "Capacité", [
-            r'([0-9]+)\s*couverts?',
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+)\s*couverts?',
+    elif "lave-vaisselle" in tn or "lave vaisselle" in tn:
+        _add(page, lines, "Capacité", [
+            r'([0-9]+)\s*couverts',
+            r'Capacit.\s*:\s*([0-9]+)\s*couvert',
         ], "couverts")
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Niveau sonore", [
-            r'[Nn]iveau sonore[^:]*:\s*<?[^>]*>?\s*([0-9]+)\s*(?:dB)?',
+        _energie(page, lines)
+        _add(page, lines, "Niveau sonore", [
+            r'Niveau sonore\s*:\s*([0-9]+)\s*dB',
         ], "dB")
-        _extract(page, lignes, "Consommation eau", [
-            r'[Cc]onsommation[^:]*eau[^:]*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
+        _add(page, lines, "Consommation eau", [
+            r'Consommation d.eau\s*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
         ], "L/cycle")
 
-    elif "seche-linge" in type_norm or "sèche-linge" in type_norm or "seche linge" in type_norm or "sèche linge" in type_norm:
-        # Type de séchage : chercher le mot-clé dans la page
+    elif any(x in tn for x in ["seche-linge","sèche-linge","seche linge","sèche linge"]):
+        # Type de séchage — chercher dans la section "Type de séche-linge"
         for mot, label in [
-            ("pompe à chaleur", "Pompe à chaleur"),
-            ("pompe a chaleur", "Pompe à chaleur"),
+            ("pompe", "Pompe à chaleur"),
             ("condensation", "Condensation"),
-            ("évacuation", "Évacuation"),
             ("evacuation", "Évacuation"),
+            ("évacuation", "Évacuation"),
         ]:
             if mot in page.lower():
-                lignes.append(f"Type de séchage : {label}")
+                lines.append(f"Type de séchage : {label}")
                 break
-        _extract(page, lignes, "Capacité", [
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
+        _add(page, lines, "Capacité", [
+            r'Capacit. de chargement\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
+            r'Capacit.\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
         ], "kg")
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Niveau sonore", [
-            r'[Nn]iveau sonore[^:]*:\s*<?[^>]*>?\s*([0-9]+)\s*(?:dB)?',
+        _energie(page, lines)
+        _add(page, lines, "Niveau sonore", [
+            r'Niveau sonore\s*:\s*([0-9]+)\s*dB',
         ], "dB")
 
-    elif "four" in type_norm or "cuisini" in type_norm:
-        # Type de cuisson
+    elif "four" in tn or "cuisini" in tn:
         for mot, label in [
-            ("pyrolyse", "Pyrolyse"),
-            ("chaleur tournante", "Chaleur tournante"),
-            ("gaz", "Gaz"),
-            ("électrique", "Électrique"),
-            ("electrique", "Électrique"),
+            ("pyrolyse","Pyrolyse"),
+            ("chaleur tournante","Chaleur tournante"),
+            ("gaz","Gaz"),
+            ("lectrique","Électrique"),
         ]:
             if mot in page.lower():
-                lignes.append(f"Type de cuisson : {label}")
+                lines.append(f"Type de cuisson : {label}")
                 break
-        _extract(page, lignes, "Capacité", [
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
-            r'[Vv]olume[^:]*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
+        _add(page, lines, "Capacité", [
+            r'Volume\s*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
+            r'Capacit.\s*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
         ], "L")
-        _extract_energie(page, lignes)
+        _energie(page, lines)
 
-    elif "réfrigérateur" in type_norm or "refrigerateur" in type_norm or "frigo" in type_norm:
-        # Type de froid
+    elif any(x in tn for x in ["réfrigérateur","refrigerateur","frigo"]):
         for mot, label in [
-            ("no frost", "No Frost"),
-            ("froid ventilé", "Froid ventilé"),
-            ("froid ventile", "Froid ventilé"),
-            ("froid statique", "Froid statique"),
+            ("no frost","No Frost"),
+            ("ventil","Froid ventilé"),
+            ("statique","Froid statique"),
         ]:
             if mot in page.lower():
-                lignes.append(f"Type de froid : {label}")
+                lines.append(f"Type de froid : {label}")
                 break
-        _extract(page, lignes, "Capacité totale", [
-            r'[Cc]apacit[eé] totale[^:]*:\s*([0-9]+)\s*[lL]',
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+)\s*[lL]',
+        _add(page, lines, "Capacité totale", [
+            r'Capacit. totale\s*:\s*([0-9]+)\s*[lL]',
+            r'Capacit.\s*:\s*([0-9]+)\s*[lL]',
         ], "L")
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Niveau sonore", [
-            r'[Nn]iveau sonore[^:]*:\s*<?[^>]*>?\s*([0-9]+)\s*(?:dB)?',
+        _energie(page, lines)
+        _add(page, lines, "Niveau sonore", [
+            r'Niveau sonore\s*:\s*([0-9]+)\s*dB',
         ], "dB")
 
-    elif "congélateur" in type_norm or "congelateur" in type_norm:
-        _extract(page, lignes, "Capacité", [
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+)\s*[lL]',
+    elif any(x in tn for x in ["congélateur","congelateur"]):
+        _add(page, lines, "Capacité", [
+            r'Capacit.\s*:\s*([0-9]+)\s*[lL]',
         ], "L")
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Niveau sonore", [
-            r'[Nn]iveau sonore[^:]*:\s*<?[^>]*>?\s*([0-9]+)\s*(?:dB)?',
+        _energie(page, lines)
+        _add(page, lines, "Niveau sonore", [
+            r'Niveau sonore\s*:\s*([0-9]+)\s*dB',
         ], "dB")
 
     else:
-        # Générique
-        _extract_energie(page, lignes)
-        _extract(page, lignes, "Capacité", [
-            r'[Cc]apacit[eé][^:]*:\s*([0-9]+[,.]?[0-9]*)\s*(kg|L|couverts?)',
-        ], "")
+        _energie(page, lines)
 
     # ── Dimensions ─────────────────────────────────────────────────────────
-    dimensions = "Non trouvé"
-    for p in [
-        r'LxHxP\s*[:\s]*([0-9]+[,.]?[0-9]*\s*[×xX]\s*[0-9]+[,.]?[0-9]*\s*[×xX]\s*[0-9]+[,.]?[0-9]*\s*cm)',
-        r'([0-9]+[,.]?[0-9]*\s*[×xX]\s*[0-9]+[,.]?[0-9]*\s*[×xX]\s*[0-9]+[,.]?[0-9]*\s*cm)',
-        r'[Ll]argeur[^:]*:\s*([0-9]+[,.]?[0-9]*)\s*cm',
-    ]:
-        m = re.search(p, page, re.IGNORECASE)
+    dims = "Non trouvé"
+    # Format page : "850 x 596 x 650 mm (HxLxP)"  → on convertit en LxHxP cm
+    m = re.search(
+        r'Dimensions d.ball.\s*:\s*([0-9]+)\s*x\s*([0-9]+)\s*x\s*([0-9]+)\s*mm\s*\(HxLxP\)',
+        page, re.IGNORECASE
+    )
+    if m:
+        h, l, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        dims = f"{l/10:.1f}×{h/10:.1f}×{p/10:.1f} cm"
+    else:
+        # Essayer format cm direct
+        m = re.search(
+            r'([0-9]+[,.]?[0-9]*)\s*[xX×]\s*([0-9]+[,.]?[0-9]*)\s*[xX×]\s*([0-9]+[,.]?[0-9]*)\s*cm',
+            page
+        )
         if m:
-            dimensions = m.group(1).strip()
-            break
+            dims = f"{m.group(1)}×{m.group(2)}×{m.group(3)} cm"
 
-    fiche = "\n".join(lignes) if lignes else "Non trouvé"
-    return fiche, dimensions
+    fiche = "\n".join(lines) if lines else "Non trouvé"
+    return fiche, dims
 
 
-def _extract(page, lignes, label, patterns, unit):
+def _add(page, lines, label, patterns, unit):
     for p in patterns:
         m = re.search(p, page, re.IGNORECASE)
         if m:
             val = m.group(1).strip()
-            lignes.append(f"{label} : {val} {unit}".strip())
+            lines.append(f"{label} : {val} {unit}".strip())
             return True
     return False
 
 
-def _extract_energie(page, lignes):
-    # Nouvelle classe (post-2021 : A, B, C, D, E, F, G sans +)
+def _energie(page, lines):
+    # Nouvelle classe (post-2021 : A, B, C, D, E, F, G)
     for p in [
-        r'[Nn]ouvelle classe[^:]*:\s*<[^>]*>([A-G])</a>',
-        r'[Nn]ouvelle classe[^:]*:\s*([A-G])\b',
-        r'[Cc]lasse.*?2021[^:]*:\s*([A-G])\b',
+        r'Classe .nergie\s*:\s*([A-G])\s*\(Indice',      # "(Indice d'efficacité)"
+        r'\(depuis mi-2025\).*?Classe .nergie\s*:\s*([A-G])\b',
+        r'Classe .nergie.*?:\s*\*\*([A-G])\*\*',
     ]:
-        m = re.search(p, page, re.IGNORECASE)
+        m = re.search(p, page, re.IGNORECASE | re.DOTALL)
         if m:
-            lignes.append(f"Nouvelle classe énergétique : {m.group(1).strip()}")
+            lines.append(f"Nouvelle classe énergétique : {m.group(1)}")
             return
-
-    # Ancienne classe (A+++, A++, A+, A, B, C, D, E, F, G)
+    # Ancienne classe
     for p in [
-        r'[Aa]ncienne classe[^:]*:\s*<[^>]*>([A-G][+]*)</a>',
-        r'[Aa]ncienne classe[^:]*:\s*([A-G][+]+)',
-        r'[Cc]lasse [eé]nerg[^:]*:\s*([A-G][+]*)',
+        r'Classe .nergie\s*:\s*\*\*([A-G][+]*)\*\*',
+        r'Classe .nergie\s*:\s*([A-G][+]+)',
     ]:
         m = re.search(p, page, re.IGNORECASE)
         if m:
-            lignes.append(f"Ancienne classe énergétique : {m.group(1).strip()}")
+            lines.append(f"Ancienne classe énergétique : {m.group(1)}")
             return
 
 
@@ -508,28 +433,20 @@ def open_sheet():
         "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(SHEET_ID)
-    return sh.worksheet(SHEET_TAB)
+    gc    = gspread.authorize(creds)
+    return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB)
 
 
 # ── Boucle principale ─────────────────────────────────────────────────────────
 def process_all():
-    log(f"Shard {SHARD_INDEX}/{SHARD_COUNT} — batch={BATCH_LIMIT} — delay={DELAY_SECONDS}s")
+    log(f"Shard {SHARD_INDEX}/{SHARD_COUNT} | batch={BATCH_LIMIT} | delay={DELAY_SECONDS}s")
+    ws        = open_sheet()
+    all_rows  = ws.get_all_values()
+    traites   = 0
 
-    ws = open_sheet()
-    all_values = ws.get_all_values()
+    for i, row in enumerate(all_rows[1:], start=2):  # ligne 1 = en-têtes
 
-    if len(all_values) < 2:
-        log("Aucune donnée dans l'onglet.")
-        return
-
-    # Lignes de données (à partir de la ligne 2, index 1)
-    rows = all_values[1:]
-    traites = 0
-
-    for i, row in enumerate(rows, start=2):
-        # Shard : chaque job traite 1/N des lignes
+        # Shard : ce job traite 1/N des lignes
         if (i - 2) % SHARD_COUNT != SHARD_INDEX:
             continue
 
@@ -537,77 +454,73 @@ def process_all():
             log(f"Limite de lot atteinte ({BATCH_LIMIT}) — arrêt.")
             break
 
-        def get(col_idx):
-            return row[col_idx].strip() if col_idx < len(row) else ""
+        def g(col):
+            idx = col - 2  # col B=2 → index 0
+            return row[idx].strip() if idx < len(row) else ""
 
-        type_app = get(COL_TYPE)
-        marque   = get(COL_MARQUE)
-        modele   = get(COL_MODELE)
+        type_app = g(COL_TYPE)
+        marque   = g(COL_MARQUE)
+        modele   = g(COL_MODELE)
 
         if not marque and not modele:
             continue
 
         # Sauter si déjà traité (E et G remplis)
-        prix_exist  = get(COL_PRIX)
-        fiche_exist = get(COL_FICHE)
-        if prix_exist and fiche_exist:
+        if g(COL_PRIX) and g(COL_FICHE):
             continue
 
         log(f"Ligne {i} : {type_app} | {marque} | {modele}")
 
         try:
-            modele_clean = _nettoyer_modele(marque, modele)
+            mc = _nettoyer_modele(marque, modele)
 
-            # ── 1. Trouver l'URL ──────────────────────────────────────────
-            url = get(COL_LIEN)
-            if url and not (_slug_matches(url, modele_clean) or _slug_matches(url, modele)):
-                log(f"  ⚠ Lien existant invalide — recherche...")
+            # ── 1. URL ────────────────────────────────────────────────────
+            url = g(COL_LIEN)
+            if url and not (_slug_match(url, mc) or _slug_match(url, modele)):
+                log(f"  ⚠ Lien existant invalide — re-cherche")
                 url = None
 
             if not url:
-                url, _ = find_product_url(type_app, marque, modele)
+                url = find_url(type_app, marque, modele)
 
             if not url:
                 log(f"  ✗ URL introuvable")
-                ws.update_cell(i, 5, "Non trouvé")   # E
-                ws.update_cell(i, 6, "Non trouvé")   # F
-                ws.update_cell(i, 7, "Non trouvé")   # G
-                ws.update_cell(i, 8, "Non trouvé")   # H
+                ws.update_cell(i, COL_PRIX,  "Non trouvé")
+                ws.update_cell(i, COL_LIEN,  "Non trouvé")
+                ws.update_cell(i, COL_FICHE, "Non trouvé")
+                ws.update_cell(i, COL_DIM,   "Non trouvé")
                 traites += 1
                 time.sleep(DELAY_SECONDS)
                 continue
 
-            log(f"  → URL : {url}")
+            log(f"  → {url}")
 
             # ── 2. Prix ───────────────────────────────────────────────────
             time.sleep(2)
-            prix, _ = fetch_prix(url)
-            prix_val = prix if prix else "Non trouvé"
-            log(f"  → Prix : {prix_val}")
+            prix = fetch_prix(url) or "Non trouvé"
+            log(f"  → Prix : {prix}")
 
             # ── 3. Fiche technique ────────────────────────────────────────
             time.sleep(2)
-            fiche, dimensions = fetch_fiche_technique(url, type_app)
+            fiche, dims = fetch_fiche(url, type_app)
             log(f"  → Fiche :\n{fiche}")
-            log(f"  → Dimensions : {dimensions}")
+            log(f"  → Dims : {dims}")
 
-            # ── 4. Écriture dans le sheet ─────────────────────────────────
-            ws.update_cell(i, 5, prix_val)    # E — Prix neuf
-            ws.update_cell(i, 6, url)          # F — Lien
-            ws.update_cell(i, 7, fiche)        # G — Fiche technique
-            ws.update_cell(i, 8, dimensions)   # H — Dimensions
-
+            # ── 4. Écriture ───────────────────────────────────────────────
+            ws.update_cell(i, COL_PRIX,  prix)
+            ws.update_cell(i, COL_LIEN,  url)
+            ws.update_cell(i, COL_FICHE, fiche)
+            ws.update_cell(i, COL_DIM,   dims)
             traites += 1
-            log(f"  ✓ Ligne {i} écrite.")
+            log(f"  ✓ Ligne {i} OK")
 
         except RateLimitError as e:
             log(f"  ⛔ RATE LIMIT — arrêt immédiat. ({e})")
             sys.exit(1)
-
         except Exception as e:
-            log(f"  ✗ Erreur inattendue : {e}")
-            ws.update_cell(i, 5, "Erreur")
-            ws.update_cell(i, 7, f"Erreur : {e}")
+            log(f"  ✗ Erreur : {e}")
+            ws.update_cell(i, COL_PRIX,  "Erreur")
+            ws.update_cell(i, COL_FICHE, f"Erreur : {e}")
             traites += 1
 
         time.sleep(DELAY_SECONDS)

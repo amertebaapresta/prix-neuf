@@ -38,7 +38,7 @@ COL_MARQUE= "Marque"
 COL_MODELE= "Modèle"
 COL_PRIX  = "Prix neuf"
 COL_LIEN  = "Lien"
-COL_FICHE = "Fiche technique"
+COL_FICHE = "Fiche technique "
 COL_DIM   = "Dimension"
 
 HEADERS_HTTP = {

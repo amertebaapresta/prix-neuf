@@ -298,10 +298,8 @@ def fetch_prix(url):
 # ── Fiche technique ───────────────────────────────────────────────────────────
 def fetch_fiche(url, type_appareil):
     """
-    Parse la page produit (iso-8859-1) et extrait les champs de la fiche.
-    IMPORTANT : sur cette page, les valeurs sont séparées du label par
-    des sauts de ligne (format tableau HTML converti en texte).
-    Ex : "Capacité de chargement :\n\n**9 kg**"
+    Parse le HTML brut (iso-8859-1) de la page produit.
+    Structure réelle : <td class="carac_name">Label</td><td class="carac_value"><b>Valeur</b></td>
     """
     try:
         r = _get_or_stop(url, headers=HEADERS_HTTP, timeout=15, allow_redirects=True)
@@ -310,7 +308,7 @@ def fetch_fiche(url, type_appareil):
     except Exception as e:
         return "Erreur réseau", "Non trouvé"
 
-    # Décodage iso-8859-1 OBLIGATOIRE pour ce site
+    # Décodage iso-8859-1 OBLIGATOIRE — le site encode é=\xe9, à=\xe0 etc.
     page = _decode(r)
     tn   = _normaliser(type_appareil or "")
     lines = []
@@ -462,35 +460,49 @@ def fetch_fiche(url, type_appareil):
 
 
 def _add(page, lines, label, patterns, unit):
+    """
+    Cherche le premier pattern qui matche dans le HTML brut iso-8859-1.
+    Les valeurs sont dans : <td class="carac_value"><b>VALEUR</b>...</td>
+    """
     for p in patterns:
-        m = re.search(p, page, re.IGNORECASE)
+        m = re.search(p, page, re.IGNORECASE | re.DOTALL)
         if m:
-            val = m.group(1).strip().rstrip("*").strip()
+            val = m.group(1).strip()
+            # Nettoyer les balises HTML résiduelles
+            val = re.sub(r'<[^>]+>', '', val).strip()
             lines.append((f"{label} : {val} {unit}").strip())
             return True
     return False
 
 
 def _energie(page, lines):
-    # Nouvelle classe (post-2021 : lettre seule A-G)
+    """
+    Extrait la classe énergétique depuis le HTML :
+    <td class="carac_name">• Classe énergie :</td>
+    <td class="carac_value"><b>A++</b> (Lavage)</td>
+    """
+    # Pattern HTML réel avec balises <td> et <b>
+    # Chercher "Classe .nergie" suivi de la valeur dans le td suivant
     for p in [
-        r'Classe .nergie\s*:\s*\**([A-G])\**\s*\(Indice',
-        r'depuis mi-2025.*?Classe .nergie\s*:\s*\**([A-G])\**',
+        # Nouvelle classe (A à G, sans +) — avec mention "(Indice" dans la valeur
+        r'Classe .nergie\s*:[^<]*</td>\s*<td[^>]*>.*?<b>([A-G])</b>[^<]*\(Indice',
+        # Ancienne classe (A+++ à G) — avec mention "(S" pour Séchage/Lavage
+        r'Classe .nergie\s*:[^<]*</td>\s*<td[^>]*>.*?<b>([A-G][+]*)</b>',
     ]:
         m = re.search(p, page, re.IGNORECASE | re.DOTALL)
         if m:
-            lines.append(f"Nouvelle classe énergétique : {m.group(1)}")
-            return
-    # Ancienne classe (A+++ à G)
-    for p in [
-        r'Classe .nergie\s*:\s*\**([A-G][+]*)\**\s*\([SL]',  # (Séchage) ou (Lavage)
-        r'Classe .nergie\s*:\s*\**([A-G][+]+)\**',
-        r'Classe\s*:\s*\**([A-G][+]+)\**',
-    ]:
-        m = re.search(p, page, re.IGNORECASE)
-        if m:
-            lines.append(f"Ancienne classe énergétique : {m.group(1)}")
-            return
+            val = m.group(1).strip()
+            if '+' in val or len(val) == 1:
+                if '+' in val:
+                    lines.append(f"Ancienne classe énergétique : {val}")
+                else:
+                    # Vérifier si c'est nouvelle ou ancienne
+                    context = page[m.start():m.start()+200]
+                    if 'Indice' in context or '2025' in context:
+                        lines.append(f"Nouvelle classe énergétique : {val}")
+                    else:
+                        lines.append(f"Ancienne classe énergétique : {val}")
+                return
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────

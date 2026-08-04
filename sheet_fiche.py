@@ -298,9 +298,10 @@ def fetch_prix(url):
 # ── Fiche technique ───────────────────────────────────────────────────────────
 def fetch_fiche(url, type_appareil):
     """
-    Parse la page produit (iso-8859-1) et extrait les champs de la fiche
-    technique selon le type d'appareil.
-    Retourne (fiche_str, dimensions_str).
+    Parse la page produit (iso-8859-1) et extrait les champs de la fiche.
+    IMPORTANT : sur cette page, les valeurs sont séparées du label par
+    des sauts de ligne (format tableau HTML converti en texte).
+    Ex : "Capacité de chargement :\n\n**9 kg**"
     """
     try:
         r = _get_or_stop(url, headers=HEADERS_HTTP, timeout=15, allow_redirects=True)
@@ -314,10 +315,10 @@ def fetch_fiche(url, type_appareil):
     tn   = _normaliser(type_appareil or "")
     lines = []
 
-    # ── Poids ─────────────────────────────────────────────────────────────
+    # ── Poids (ex: "Poids déballé :\n\n71.01 kg") ───────────────────────
     for p in [
         r'Poids d.ball.\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
-        r'Poids\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
+        r'Poids emball.\s*:\s*([0-9]+[,.]?[0-9]*)\s*kg',
     ]:
         m = re.search(p, page, re.IGNORECASE)
         if m:
@@ -326,36 +327,42 @@ def fetch_fiche(url, type_appareil):
 
     # ── Champs selon type ──────────────────────────────────────────────────
     if "lave-linge" in tn or "lave linge" in tn:
+        # Capacité : "Capacité de chargement :\n\n**9 kg**"
         _add(page, lines, "Capacité", [
-            r'Capacit. de chargement\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
-            r'Capacit.\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
+            r'Capacit. de chargement\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
+            r'Capacit.\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
         ], "kg")
+        # Essorage : "Entre 400 et **1400 tr/min**"
         _add(page, lines, "Essorage", [
-            r'[Ee]ssorage max\s*:\s*\**([0-9 ]+)\s*\**\s*(?:tr/min|trs)',
-            r'[Ee]ssorage\s*:\s*\**([0-9 ]+)\s*\**\s*(?:tr/min|trs)',
+            r'Entre \d+ et \**([0-9 ]+)\**\s*tr/min',
+            r'[Ee]ssorage[^:]*:\s*\**([0-9 ]+)\**\s*(?:tr/min|trs)',
         ], "tr/min")
         _energie(page, lines)
+        # Niveau sonore : "**75** dB(A)"
         _add(page, lines, "Niveau sonore", [
-            r'[Nn]iveau sonore\s*:\s*\**([0-9]+)\s*\**\s*dB',
+            r'\**([0-9]+)\**\s*dB\(A\)',
+            r'[Nn]iveau sonore[^:]*:\s*\**([0-9]+)\**\s*dB',
         ], "dB")
 
     elif "lave-vaisselle" in tn or "lave vaisselle" in tn:
         _add(page, lines, "Capacité", [
+            r'Capacit.\s*:\s*\**\s*([0-9]+)\s*\**\s*couvert',
             r'([0-9]+)\s*couverts',
-            r'Capacit.\s*:\s*([0-9]+)\s*couvert',
         ], "couverts")
         _energie(page, lines)
         _add(page, lines, "Niveau sonore", [
-            r'[Nn]iveau sonore\s*:\s*\**([0-9]+)\s*\**\s*dB',
+            r'\**([0-9]+)\**\s*dB\(A\)',
+            r'[Nn]iveau sonore[^:]*:\s*\**([0-9]+)\**\s*dB',
         ], "dB")
         _add(page, lines, "Consommation eau", [
-            r'[Cc]onsommation d.eau\s*:\s*([0-9]+[,.]?[0-9]*)\s*[lL]',
+            r'[Cc]onsommation d.eau[^:]*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*[Ll]',
         ], "L/cycle")
 
     elif any(x in tn for x in ["seche-linge","sèche-linge","seche linge","sèche linge"]):
-        # Type de séchage : chercher dans le texte de la fiche
+        # Type : "À condensation avec pompe à chaleur"
         found = _add(page, lines, "Type de séchage", [
             r'Type de s.che-linge\s*:\s*\**([^\n\r*<]{5,60})',
+            r'Type de s.chage\s*:\s*\**([^\n\r*<]{5,60})',
         ], "")
         if not found:
             for mot, label in [
@@ -367,17 +374,19 @@ def fetch_fiche(url, type_appareil):
                     lines.append(f"Type de séchage : {label}")
                     break
         _add(page, lines, "Capacité", [
-            r'Capacit. de chargement\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
-            r'Capacit.\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
+            r'Capacit. de chargement\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
+            r'Capacit.\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*kg',
         ], "kg")
         _energie(page, lines)
         _add(page, lines, "Niveau sonore", [
-            r'[Nn]iveau sonore\s*:\s*\**([0-9]+)\s*\**\s*dB',
+            r'\**([0-9]+)\**\s*dB\(A\)',
+            r'[Nn]iveau sonore[^:]*:\s*\**([0-9]+)\**\s*dB',
         ], "dB")
 
     elif "four" in tn or "cuisini" in tn or "micro" in tn:
         found = _add(page, lines, "Type de cuisson", [
             r'Type de cuisson\s*:\s*\**([^\n\r*<]{3,50})',
+            r'Fonctionnement\s*:\s*\**([^\n\r*<]{3,50})',
         ], "")
         if not found:
             for mot, label in [
@@ -390,8 +399,8 @@ def fetch_fiche(url, type_appareil):
                     lines.append(f"Type de cuisson : {label}")
                     break
         _add(page, lines, "Capacité", [
-            r'[Vv]olume\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*[Ll]',
-            r'Capacit.\s*:\s*\**([0-9]+[,.]?[0-9]*)\s*\**\s*[Ll]',
+            r'[Vv]olume\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*[Ll]',
+            r'Capacit.\s*:\s*\**\s*([0-9]+[,.]?[0-9]*)\s*\**\s*[Ll]',
         ], "L")
         _energie(page, lines)
 
@@ -409,29 +418,30 @@ def fetch_fiche(url, type_appareil):
                     lines.append(f"Type de froid : {label}")
                     break
         _add(page, lines, "Capacité totale", [
-            r'Capacit. totale\s*:\s*\**([0-9]+)\s*\**\s*[Ll]',
-            r'Capacit.\s*:\s*\**([0-9]+)\s*\**\s*[Ll]',
+            r'Capacit. totale\s*:\s*\**\s*([0-9]+)\s*\**\s*[Ll]',
+            r'Capacit.\s*:\s*\**\s*([0-9]+)\s*\**\s*[Ll]',
         ], "L")
         _energie(page, lines)
         _add(page, lines, "Niveau sonore", [
-            r'[Nn]iveau sonore\s*:\s*\**([0-9]+)\s*\**\s*dB',
+            r'\**([0-9]+)\**\s*dB\(A\)',
+            r'[Nn]iveau sonore[^:]*:\s*\**([0-9]+)\**\s*dB',
         ], "dB")
 
     elif any(x in tn for x in ["congélateur","congelateur"]):
         _add(page, lines, "Capacité", [
-            r'Capacit.\s*:\s*\**([0-9]+)\s*\**\s*[Ll]',
+            r'Capacit.\s*:\s*\**\s*([0-9]+)\s*\**\s*[Ll]',
         ], "L")
         _energie(page, lines)
         _add(page, lines, "Niveau sonore", [
-            r'[Nn]iveau sonore\s*:\s*\**([0-9]+)\s*\**\s*dB',
+            r'\**([0-9]+)\**\s*dB\(A\)',
         ], "dB")
 
     else:
         _energie(page, lines)
 
     # ── Dimensions ──────────────────────────────────────────────────────────
+    # Format : "850 x 600 x 610 mm (HxLxP)" → on convertit en LxHxP cm
     dims = "Non trouvé"
-    # Format page iso-8859-1 : "850 x 596 x 650 mm (HxLxP)" → LxHxP en cm
     m = re.search(
         r'Dimensions d.ball.\s*:\s*([0-9]+)\s*x\s*([0-9]+)\s*x\s*([0-9]+)\s*mm\s*\(HxLxP\)',
         page, re.IGNORECASE

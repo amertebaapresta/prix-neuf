@@ -404,26 +404,44 @@ def parse_page(page, type_appareil):
 
 
 def _classe(page, lines):
-    """Extrait la classe énergie depuis le résumé <li> ou le tableau."""
-    # Résumé : <li>Classe énergie : <b>A</b></li>
+    """
+    Extrait la classe énergie.
+    Cherche dans : résumé <li>, balises <b>, et tableau product-tech.
+    Distingue ancienne (A+++/A++/A+) et nouvelle (A à G sans +).
+    """
+    # 1. Résumé <li> : <li>Classe énergie : <b>A++</b></li>
     m = re.search(r'Classe [eé]nergie\s*:\s*<b>([A-G][+]*)</b>', page, re.IGNORECASE)
     if m:
         val = m.group(1)
-        if '+' in val:
-            lines.append(f"Ancienne classe énergétique : {val}")
-        else:
-            lines.append(f"Nouvelle classe énergétique : {val}")
+        label = "Ancienne" if '+' in val else "Nouvelle"
+        lines.append(f"{label} classe énergétique : {val}")
         return
-    # Tableau product-tech
+
+    # 2. Tableau product-tech (Label + valeur dans div suivante)
     val = _tech(page, r'Classe [eé]nergie')
     if val:
+        # Nettoyer : "A++ (Lavage)" → "A++"
         m2 = re.search(r'([A-G][+]*)', val)
         if m2:
             v = m2.group(1)
-            if '+' in v:
-                lines.append(f"Ancienne classe énergétique : {v}")
-            else:
-                lines.append(f"Nouvelle classe énergétique : {v}")
+            label = "Ancienne" if '+' in v else "Nouvelle"
+            lines.append(f"{label} classe énergétique : {v}")
+            return
+
+    # 3. Chercher n'importe quelle mention de classe dans toute la page
+    # Pattern large : "classe" suivi de la lettre dans des balises
+    for pat in [
+        r'[Cc]lasse\s*[eé]nerg[^<]*<[^>]+>\s*([A-G][+]+)',   # ancienne avec +
+        r'[Cc]lasse\s*[eé]nerg[^<]*<[^>]+>\s*([A-G])\s*<',   # nouvelle sans +
+        r'[Cc]lasse\s*:\s*<b>([A-G][+]*)</b>',
+        r'Indice\s+d\'efficacit[eé]\s*:\s*([A-G])',
+    ]:
+        m3 = re.search(pat, page, re.IGNORECASE)
+        if m3:
+            v = m3.group(1)
+            label = "Ancienne" if '+' in v else "Nouvelle"
+            lines.append(f"{label} classe énergétique : {v}")
+            return
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
@@ -459,8 +477,9 @@ def process_all():
         type_app = get(COL_TYPE); marque = get(COL_MARQUE); modele = get(COL_MODELE)
         if not marque and not modele: continue
 
-        # Sauter si déjà traité
-        if get(COL_PRIX) and get(COL_FICHE) and not FORCE_REFRESH_ALL: continue
+        # Sauter si fiche déjà remplie et non vide
+        fiche_exist = get(COL_FICHE)
+        if fiche_exist and fiche_exist not in ('Non trouvé','Erreur') and not FORCE_REFRESH_ALL: continue
 
         mon_tour = (candidat_index % SHARD_COUNT == SHARD_INDEX)
         candidat_index += 1

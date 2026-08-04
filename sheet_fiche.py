@@ -218,6 +218,7 @@ def _tech(page, label_pattern):
     Extrait la valeur depuis :
     <div class="product-tech-label">Label :</div>
     <div class="...product-tech-text">VALEUR</div>
+    Décode automatiquement les entités HTML (&Agrave; → À, etc.)
     """
     pat = (
         label_pattern +
@@ -227,6 +228,7 @@ def _tech(page, label_pattern):
     m = re.search(pat, page, re.IGNORECASE | re.DOTALL)
     if m:
         val = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+        val = html.unescape(val)  # &Agrave; → À, &eacute; → é, etc.
         return val if val else None
     return None
 
@@ -242,7 +244,9 @@ def parse_page(page, type_appareil):
     lines = []
 
     # ── Prix ──────────────────────────────────────────────────────────────────
-    texte_plat = re.sub(r'<[^>]+>', ' ', page)
+    # Décoder les entités HTML (&euro; → €, &nbsp; → espace, etc.)
+    page_decoded = html.unescape(page)
+    texte_plat = re.sub(r'<[^>]+>', ' ', page_decoded)
     texte_plat = re.sub(r'\s+', ' ', texte_plat)
     prix = None
     for pat in PRICE_PATTERNS:
@@ -278,9 +282,15 @@ def parse_page(page, type_appareil):
 
         _classe(page, lines)
 
-        # Niveau sonore dans le résumé <li>
+        # Niveau sonore dans le résumé <li> OU dans le tableau
         m = re.search(r'Niveau sonore max\s*:\s*<b>([0-9]+)\s*dB</b>', page, re.IGNORECASE)
-        if m: lines.append(f"Niveau sonore : {m.group(1)} dB")
+        if not m:
+            val = _tech(page, r'Niveau sonore')
+            if val:
+                m2 = re.search(r'([0-9]+)\s*dB', val)
+                if m2: lines.append(f"Niveau sonore : {m2.group(1)} dB")
+        else:
+            lines.append(f"Niveau sonore : {m.group(1)} dB")
 
     elif "lave-vaisselle" in tn or "lave vaisselle" in tn:
         # Capacité : chercher X couverts

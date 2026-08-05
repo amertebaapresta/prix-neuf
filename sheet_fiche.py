@@ -24,7 +24,7 @@ def now_paris(): return datetime.now(PARIS_TZ)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
-WORKSHEET_NAME   = "TEST"
+WORKSHEET_NAME   = "Copie de Clé unique"
 CREDENTIALS_FILE = "credentials.json"
 FORCE_REFRESH_ALL = False
 BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "5"))
@@ -38,7 +38,7 @@ COL_MARQUE= "Marque"
 COL_MODELE= "Modèle"
 COL_PRIX  = "Prix neuf"
 COL_LIEN  = "Lien"
-COL_FICHE = "Fiche technique "
+COL_FICHE = "Fiche technique"
 COL_DIM   = "Dimension"
 COL_HIST  = "Historique prix"
 COL_RESUME= "Résumé prix"

@@ -91,12 +91,15 @@ def _is_recherche_page(url):
     return url.rsplit("/", 1)[-1].startswith("recherche-")
 
 def _slug_matches(url, modele):
-    # Version normale
-    norm = re.sub(r"[\s\-]","",modele).upper()
     url_norm = re.sub(r"[\s\-]","",url).upper()
+    # Version normale (sans espaces et tirets)
+    norm = re.sub(r"[\s\-]","",modele).upper()
     if norm in url_norm: return True
+    # Version sans caractères spéciaux . / + (comme le site les encode)
+    norm_clean = re.sub(r"[\s\-\.\+/]","",modele).upper()
+    if norm_clean in url_norm: return True
     # Version avec + → PLUS
-    norm_plus = norm.replace("+","PLUS")
+    norm_plus = norm_clean.replace("+","PLUS")
     if norm_plus in url_norm: return True
     return False
 
@@ -610,6 +613,16 @@ def process_all():
 
             log(f"  → URL : {url}")
 
+            # Vérifier que l'URL est valide avant de faire le GET
+            if not url or not url.startswith("http"):
+                log(f"  ✗ URL invalide : {url}")
+                _write(ws, idx, i, {COL_PRIX:"Non trouvé", COL_LIEN:"Non trouvé",
+                                    COL_FICHE:"Non trouvé", COL_DIM:"Non trouvé",
+                                    COL_HIST:"Non trouvé", COL_RESUME:"Non trouvé"})
+                traites += 1
+                time.sleep(DELAY_SECONDS)
+                continue
+
             # Récupérer la page UNE SEULE FOIS → prix + fiche + dims
             time.sleep(2)
             r    = _get_or_stop(url, headers=HEADERS_HTTP, timeout=15, allow_redirects=True)
@@ -640,38 +653,16 @@ def process_all():
 
 
 def _write(ws, idx, row_num, values):
-    """
-    Écrit toutes les valeurs en UNE SEULE requête batch
-    pour éviter le quota exceeded de l'API Google Sheets.
-    """
-    if not values:
-        return
-
-    # Trouver la plage min/max des colonnes à écrire
-    col_indices = {col_name: idx[col_name]+1 for col_name in values if col_name in idx}
-    if not col_indices:
-        return
-
-    min_col = min(col_indices.values())
-    max_col = max(col_indices.values())
-
-    # Lire la ligne actuelle pour ne pas écraser les colonnes non concernées
-    row_range = f"{gspread.utils.rowcol_to_a1(row_num, min_col)}:{gspread.utils.rowcol_to_a1(row_num, max_col)}"
-    current = ws.row_values(row_num)
-
-    # Construire la nouvelle ligne
-    new_row = list(current) + [''] * (max_col - len(current))
+    """Écrit les valeurs cellule par cellule avec pause pour éviter le quota."""
     for col_name, val in values.items():
         if col_name not in idx: continue
-        col_idx = idx[col_name]  # 0-based
-        if col_idx < len(new_row):
-            new_row[col_idx] = val
-        else:
-            new_row.extend([''] * (col_idx - len(new_row) + 1))
-            new_row[col_idx] = val
-
-    # Écrire toute la plage en une seule requête
-    ws.update(row_range, [new_row[min_col-1:max_col]])
+        col_letter = gspread.utils.rowcol_to_a1(row_num, idx[col_name]+1)
+        try:
+            ws.update_acell(col_letter, val)
+            time.sleep(0.5)  # pause anti-quota
+        except Exception as e:
+            log(f"  ⚠ Erreur écriture {col_name}: {e}")
+            time.sleep(2)
 
     # Coloriage automatique colonne Résumé prix
     if COL_RESUME in values and COL_RESUME in idx:

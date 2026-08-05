@@ -181,6 +181,21 @@ def _nettoyer_modele(marque, modele):
 def _generer_variantes_tiret(modele):
     return [modele[:-n]+"-"+modele[-n:] for n in (1,2,3) if len(modele)>n+2]
 
+def _prefixes_marque(marque, modele):
+    """
+    Certaines marques (ex: VALBERG) ont leur préfixe collé au modèle dans l'URL
+    Ex: VALBERG + WF914AW180C → VALWF914AW180C
+    Retourne les variantes à tester avec préfixe collé.
+    """
+    variantes = []
+    marque_norm = re.sub(r"[^A-Za-z0-9]","",marque).upper()
+    modele_norm = re.sub(r"[^A-Za-z0-9]","",modele).upper()
+    for taille in (3, 4):
+        if len(marque_norm) >= taille:
+            prefixe = marque_norm[:taille]
+            variantes.append(prefixe + modele_norm)
+    return variantes
+
 def _sans_prefixe_marque(marque, modele):
     mn = re.sub(r"[^A-Za-z]","",marque).upper()
     for t in (4,3):
@@ -211,6 +226,16 @@ def find_product_url(type_appareil, marque, modele):
         time.sleep(2)
         u, _ = _try_search(f"{me} {v}".strip(), type_appareil, mc)
         if u and _slug_matches(u, mc): return u, "haute"
+
+    # Passe spéciale : préfixe marque collé au modèle (ex: VALBERG → VALWF914AW180C)
+    for v in _prefixes_marque(marque, mc):
+        time.sleep(2)
+        u, _ = _try_search(f"{me} {v}".strip(), type_appareil, mc)
+        if u and _slug_matches(u, mc): return u, "haute"
+        time.sleep(2)
+        u, _ = _try_search(v, type_appareil, mc)
+        if u and _slug_matches(u, mc): return u, "haute"
+
     if url2: return url2, "approximative"
     if url:  return url,  "approximative"
     return None, None
@@ -500,7 +525,10 @@ def _classe(page, lines):
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 def get_worksheet():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive.readonly"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
     creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
     return gspread.authorize(creds).open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
 
@@ -601,6 +629,42 @@ def _write(ws, idx, row_num, values):
         if col_name not in idx: continue
         col_letter = gspread.utils.rowcol_to_a1(row_num, idx[col_name]+1)
         ws.update_acell(col_letter, val)
+
+    # Coloriage automatique colonne Résumé prix (J)
+    if COL_RESUME in values and COL_RESUME in idx:
+        _colorier_resume(ws, idx, row_num, values[COL_RESUME])
+
+
+def _colorier_resume(ws, idx, row_num, resume):
+    """Colorie la cellule Résumé prix en rouge clair si écart prix max/min > 50%."""
+    import re as _re
+    if not resume or resume == "Non trouvé":
+        return
+
+    min_m = _re.search(r'Prix min\s*:\s*([\d.,]+)\s*€', resume)
+    max_m = _re.search(r'Prix max\s*:\s*([\d.,]+)\s*€', resume)
+
+    if not min_m or not max_m:
+        return
+
+    try:
+        prix_min = float(min_m.group(1).replace(",", "."))
+        prix_max = float(max_m.group(1).replace(",", "."))
+    except ValueError:
+        return
+
+    if prix_min == 0:
+        return
+
+    col_num = idx[COL_RESUME] + 1
+    cell_range = gspread.utils.rowcol_to_a1(row_num, col_num)
+
+    if prix_max > prix_min * 1.5:
+        # Rouge clair #FFCCCC
+        ws.format(cell_range, {"backgroundColor": {"red": 1, "green": 0.8, "blue": 0.8}})
+    else:
+        # Blanc (reset)
+        ws.format(cell_range, {"backgroundColor": {"red": 1, "green": 1, "blue": 1}})
 
 
 if __name__ == "__main__":

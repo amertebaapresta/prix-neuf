@@ -439,13 +439,24 @@ def parse_page(page, type_appareil):
     # Données intégrées dans le HTML : var chartsDef = '{"prices":{"dates":[...],"average":[...]}}'
     hist   = "Non trouvé"
     resume = "Non trouvé"
-    m_hist = re.search(r"var chartsDef = \'({.*?})\'", page)
+    # Le site utilise deux formats de dates : MM/YYYY (mensuel) ou DD/MM/YYYY (journalier)
+    m_hist = re.search(r"chartsDef\s*=\s*\'({.*?})\'", page)
+    if not m_hist:
+        m_hist = re.search(r"chartsDef\s*=\s*'({.*?})'", page)
     if m_hist:
         try:
             import json as _json
             data = _json.loads(m_hist.group(1).replace('\\/','/' ))
-            dates   = data['prices']['dates']
-            average = data['prices']['average']
+            dates_raw = data['prices']['dates']
+            average   = data['prices']['average']
+            # Normaliser les dates : DD/MM/YYYY → MM/YYYY
+            dates = []
+            for d in dates_raw:
+                parts = d.split('/')
+                if len(parts) == 3:   # DD/MM/YYYY → MM/YYYY
+                    dates.append(f"{parts[1]}/{parts[2]}")
+                else:                  # MM/YYYY déjà bon
+                    dates.append(d)
             # Garder seulement les changements de prix (ignorer les None/vides)
             lines_hist = []
             prev = None

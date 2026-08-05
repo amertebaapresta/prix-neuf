@@ -414,26 +414,32 @@ def parse_page(page, type_appareil):
             data = _json.loads(m_hist.group(1).replace('\\/','/' ))
             dates   = data['prices']['dates']
             average = data['prices']['average']
-            # Garder seulement les changements de prix
+            # Garder seulement les changements de prix (ignorer les None/vides)
             lines_hist = []
             prev = None
             for d, p in zip(dates, average):
+                if not p or p in (None, "null", "None", ""):
+                    continue  # ignorer les mois sans prix
                 if p != prev:
                     lines_hist.append(f"{d} : {p} €")
                     prev = p
             hist = "\n".join(lines_hist)
 
-            # Résumé : prix min, max, actuel
+            # Résumé : prix min, max, actuel (ignorer les None/vides)
             try:
-                float_prices = [(d, float(p)) for d, p in zip(dates, average)]
-                min_p = min(float_prices, key=lambda x: x[1])
-                max_p = max(float_prices, key=lambda x: x[1])
-                actuel = float_prices[-1]
-                resume = (
-                    f"Prix min : {min_p[1]:.2f} € ({min_p[0]})\n"
-                    f"Prix max : {max_p[1]:.2f} € ({max_p[0]})\n"
-                    f"Prix actuel : {actuel[1]:.2f} €"
-                )
+                float_prices = [(d, float(p)) for d, p in zip(dates, average)
+                                if p and p not in (None, "null", "None", "")]
+                if float_prices:
+                    min_p  = min(float_prices, key=lambda x: x[1])
+                    max_p  = max(float_prices, key=lambda x: x[1])
+                    actuel = float_prices[-1]
+                    resume = (
+                        f"Prix min : {min_p[1]:.2f} € ({min_p[0]})\n"
+                        f"Prix max : {max_p[1]:.2f} € ({max_p[0]})\n"
+                        f"Prix actuel : {actuel[1]:.2f} €"
+                    )
+                else:
+                    resume = "Non trouvé"
             except Exception:
                 resume = "Non trouvé"
         except Exception:

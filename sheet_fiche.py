@@ -40,6 +40,7 @@ COL_PRIX  = "Prix neuf"
 COL_LIEN  = "Lien"
 COL_FICHE = "Fiche technique "
 COL_DIM   = "Dimension"
+COL_HIST  = "Historique prix"
 
 HEADERS_HTTP = {
     "User-Agent": (
@@ -400,47 +401,64 @@ def parse_page(page, type_appareil):
             dims = val  # garder tel quel si format différent
 
     fiche = "\n".join(lines) if lines else "Non trouvé"
-    return prix, fiche, dims
+
+    # ── Historique des prix ───────────────────────────────────────────────────
+    # Données intégrées dans le HTML : var chartsDef = '{"prices":{"dates":[...],"average":[...]}}'
+    hist = "Non trouvé"
+    m_hist = re.search(r"var chartsDef = \'({.*?})\'", page)
+    if m_hist:
+        try:
+            import json as _json
+            data = _json.loads(m_hist.group(1).replace('\\/','/' ))
+            dates   = data['prices']['dates']
+            average = data['prices']['average']
+            hist = "\n".join(f"{d} : {p} €" for d, p in zip(dates, average))
+        except Exception:
+            hist = "Non trouvé"
+
+    return prix, fiche, dims, hist
 
 
 def _classe(page, lines):
     """
     Extrait la classe énergie.
-    Cherche dans : résumé <li>, balises <b>, et tableau product-tech.
-    Distingue ancienne (A+++/A++/A+) et nouvelle (A à G sans +).
+    Formats rencontrés sur le site :
+      - <li>Classe énergie : <b>A</b></li>          (avec balise <b>)
+      - Classe énergie : A ·                         (texte brut dans résumé)
+      - Tableau product-tech-label / product-tech-text
     """
-    # 1. Résumé <li> : <li>Classe énergie : <b>A++</b></li>
+    # 1. Avec balise <b> : <b>A++</b> ou <b>A</b>
     m = re.search(r'Classe [eé]nergie\s*:\s*<b>([A-G][+]*)</b>', page, re.IGNORECASE)
     if m:
-        val = m.group(1)
-        label = "Ancienne" if '+' in val else "Nouvelle"
-        lines.append(f"{label} classe énergétique : {val}")
+        v = m.group(1)
+        lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
         return
 
-    # 2. Tableau product-tech (Label + valeur dans div suivante)
+    # 2. Texte brut dans le résumé : "Classe énergie : A ·" ou "Classe énergie : A<"
+    m = re.search(r'Classe [eé]nergie\s*:\s*([A-G][+]*)\s*(?:[·<\n\r])', page, re.IGNORECASE)
+    if m:
+        v = m.group(1).strip()
+        lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
+        return
+
+    # 3. Tableau product-tech
     val = _tech(page, r'Classe [eé]nergie')
     if val:
-        # Nettoyer : "A++ (Lavage)" → "A++"
         m2 = re.search(r'([A-G][+]*)', val)
         if m2:
             v = m2.group(1)
-            label = "Ancienne" if '+' in v else "Nouvelle"
-            lines.append(f"{label} classe énergétique : {v}")
+            lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
             return
 
-    # 3. Chercher n'importe quelle mention de classe dans toute la page
-    # Pattern large : "classe" suivi de la lettre dans des balises
+    # 4. Patterns larges fallback
     for pat in [
-        r'[Cc]lasse\s*[eé]nerg[^<]*<[^>]+>\s*([A-G][+]+)',   # ancienne avec +
-        r'[Cc]lasse\s*[eé]nerg[^<]*<[^>]+>\s*([A-G])\s*<',   # nouvelle sans +
-        r'[Cc]lasse\s*:\s*<b>([A-G][+]*)</b>',
-        r'Indice\s+d\'efficacit[eé]\s*:\s*([A-G])',
+        r'[Cc]lasse\s*[eé]nerg[^:]*:\s*<[^>]+>([A-G][+]*)<',
+        r'Indice\s+d.efficacit[eé]\s*:\s*([A-G])',
     ]:
         m3 = re.search(pat, page, re.IGNORECASE)
         if m3:
             v = m3.group(1)
-            label = "Ancienne" if '+' in v else "Nouvelle"
-            lines.append(f"{label} classe énergétique : {v}")
+            lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
             return
 
 
@@ -503,12 +521,12 @@ def process_all():
 
             if not url:
                 log("  ✗ URL introuvable")
-                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé"})
+                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé"})
                 traites += 1; time.sleep(DELAY_SECONDS); continue
 
             if confiance == "approximative":
                 log("  ⚠ Confiance approximative — Non trouvé")
-                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé"})
+                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé"})
                 traites += 1; time.sleep(DELAY_SECONDS); continue
 
             log(f"  → URL : {url}")
@@ -517,14 +535,15 @@ def process_all():
             time.sleep(2)
             r    = _get_or_stop(url, headers=HEADERS_HTTP, timeout=15, allow_redirects=True)
             page = _decode(r)
-            prix, fiche, dims = parse_page(page, type_app)
+            prix, fiche, dims, hist = parse_page(page, type_app)
 
             prix = prix or "Non trouvé"
             log(f"  → Prix  : {prix}")
             log(f"  → Fiche :\n{fiche}")
             log(f"  → Dims  : {dims}")
+            log(f"  → Hist  : {hist[:50] if hist != 'Non trouvé' else hist}")
 
-            _write(ws, idx, i, {COL_PRIX:prix, COL_LIEN:url, COL_FICHE:fiche, COL_DIM:dims})
+            _write(ws, idx, i, {COL_PRIX:prix, COL_LIEN:url, COL_FICHE:fiche, COL_DIM:dims, COL_HIST:hist})
             traites += 1
             log(f"  ✓ Ligne {i} OK")
 

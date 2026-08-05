@@ -581,6 +581,10 @@ def process_all():
         fiche_exist = get(COL_FICHE)
         if fiche_exist and fiche_exist not in ('Non trouvé','Erreur') and not FORCE_REFRESH_ALL: continue
 
+        # Sauter si lien déjà "Non trouvé" (machine introuvable sur le site)
+        lien_exist = get(COL_LIEN)
+        if lien_exist and lien_exist in ('Non trouvé', 'Erreur') and not FORCE_REFRESH_ALL: continue
+
         mon_tour = (candidat_index % SHARD_COUNT == SHARD_INDEX)
         candidat_index += 1
         if not mon_tour: continue
@@ -592,7 +596,11 @@ def process_all():
             url = get(COL_LIEN)
             confiance = None
 
-            if url and url != "Non trouvé":
+            # Invalider les URLs non valides
+            if url and (not url.startswith("http") or url == "Non trouvé" or url == "Erreur"):
+                url = None
+
+            if url:
                 if _slug_matches(url, mc) or _slug_matches(url, modele):
                     confiance = "haute"
                 else:

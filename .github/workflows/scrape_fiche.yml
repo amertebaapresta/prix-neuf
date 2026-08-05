@@ -2,7 +2,8 @@ name: Murfy — Fiche Technique
 
 on:
   schedule:
-    - cron: "0 5,7,9,11,13,15,17 * * 1-5"
+    # Toutes les 30 min de 7h à 18h heure de Paris (UTC+2 été = 5h-16h UTC)
+    - cron: "0,30 5-16 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
@@ -12,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]   # 6 shards = 6 IPs différentes
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@v4
@@ -31,8 +32,8 @@ jobs:
       - name: Lancer le script fiche technique (shard ${{ matrix.shard }})
         env:
           SHEET_ID_FICHE: ${{ secrets.SHEET_ID_FICHE }}
-          SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_COUNT: 3
-          BATCH_LIMIT: 5
-          DELAY_SECONDS: 20
+          SHARD_INDEX:    ${{ matrix.shard }}
+          SHARD_COUNT:    "6"
+          BATCH_LIMIT:    "10"
+          DELAY_SECONDS:  "20"
         run: python sheet_fiche.py

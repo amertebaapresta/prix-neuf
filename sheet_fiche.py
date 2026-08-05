@@ -41,6 +41,7 @@ COL_LIEN  = "Lien"
 COL_FICHE = "Fiche technique "
 COL_DIM   = "Dimension"
 COL_HIST  = "Historique prix"
+COL_RESUME= "Résumé prix"
 
 HEADERS_HTTP = {
     "User-Agent": (
@@ -404,7 +405,8 @@ def parse_page(page, type_appareil):
 
     # ── Historique des prix ───────────────────────────────────────────────────
     # Données intégrées dans le HTML : var chartsDef = '{"prices":{"dates":[...],"average":[...]}}'
-    hist = "Non trouvé"
+    hist   = "Non trouvé"
+    resume = "Non trouvé"
     m_hist = re.search(r"var chartsDef = \'({.*?})\'", page)
     if m_hist:
         try:
@@ -412,11 +414,32 @@ def parse_page(page, type_appareil):
             data = _json.loads(m_hist.group(1).replace('\\/','/' ))
             dates   = data['prices']['dates']
             average = data['prices']['average']
-            hist = "\n".join(f"{d} : {p} €" for d, p in zip(dates, average))
+            # Garder seulement les changements de prix
+            lines_hist = []
+            prev = None
+            for d, p in zip(dates, average):
+                if p != prev:
+                    lines_hist.append(f"{d} : {p} €")
+                    prev = p
+            hist = "\n".join(lines_hist)
+
+            # Résumé : prix min, max, actuel
+            try:
+                float_prices = [(d, float(p)) for d, p in zip(dates, average)]
+                min_p = min(float_prices, key=lambda x: x[1])
+                max_p = max(float_prices, key=lambda x: x[1])
+                actuel = float_prices[-1]
+                resume = (
+                    f"Prix min : {min_p[1]:.2f} € ({min_p[0]})\n"
+                    f"Prix max : {max_p[1]:.2f} € ({max_p[0]})\n"
+                    f"Prix actuel : {actuel[1]:.2f} €"
+                )
+            except Exception:
+                resume = "Non trouvé"
         except Exception:
             hist = "Non trouvé"
 
-    return prix, fiche, dims, hist
+    return prix, fiche, dims, hist, resume
 
 
 def _classe(page, lines):
@@ -521,12 +544,12 @@ def process_all():
 
             if not url:
                 log("  ✗ URL introuvable")
-                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé"})
+                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé",COL_RESUME:"Non trouvé"})
                 traites += 1; time.sleep(DELAY_SECONDS); continue
 
             if confiance == "approximative":
                 log("  ⚠ Confiance approximative — Non trouvé")
-                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé"})
+                _write(ws, idx, i, {COL_PRIX:"Non trouvé",COL_LIEN:"Non trouvé",COL_FICHE:"Non trouvé",COL_DIM:"Non trouvé",COL_HIST:"Non trouvé",COL_RESUME:"Non trouvé"})
                 traites += 1; time.sleep(DELAY_SECONDS); continue
 
             log(f"  → URL : {url}")
@@ -535,7 +558,7 @@ def process_all():
             time.sleep(2)
             r    = _get_or_stop(url, headers=HEADERS_HTTP, timeout=15, allow_redirects=True)
             page = _decode(r)
-            prix, fiche, dims, hist = parse_page(page, type_app)
+            prix, fiche, dims, hist, resume = parse_page(page, type_app)
 
             prix = prix or "Non trouvé"
             log(f"  → Prix  : {prix}")
@@ -543,7 +566,7 @@ def process_all():
             log(f"  → Dims  : {dims}")
             log(f"  → Hist  : {hist[:50] if hist != 'Non trouvé' else hist}")
 
-            _write(ws, idx, i, {COL_PRIX:prix, COL_LIEN:url, COL_FICHE:fiche, COL_DIM:dims, COL_HIST:hist})
+            _write(ws, idx, i, {COL_PRIX:prix, COL_LIEN:url, COL_FICHE:fiche, COL_DIM:dims, COL_HIST:hist, COL_RESUME:resume})
             traites += 1
             log(f"  ✓ Ligne {i} OK")
 

@@ -91,7 +91,14 @@ def _is_recherche_page(url):
     return url.rsplit("/", 1)[-1].startswith("recherche-")
 
 def _slug_matches(url, modele):
-    return re.sub(r"[\s\-]","",modele).upper() in re.sub(r"[\s\-]","",url).upper()
+    # Version normale
+    norm = re.sub(r"[\s\-]","",modele).upper()
+    url_norm = re.sub(r"[\s\-]","",url).upper()
+    if norm in url_norm: return True
+    # Version avec + → PLUS
+    norm_plus = norm.replace("+","PLUS")
+    if norm_plus in url_norm: return True
+    return False
 
 SUFFIXES_REGIONAUX = ["FR","EU","UK","GB","DE","IT","ES","PT","NL","BE","CH","AT","PL","INT","EUR","US","EF","EC","LE"]
 

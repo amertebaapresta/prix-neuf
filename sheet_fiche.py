@@ -27,10 +27,10 @@ SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fF
 WORKSHEET_NAME   = "Copie de Clé unique"
 CREDENTIALS_FILE = "credentials.json"
 FORCE_REFRESH_ALL = False
-BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "5"))
+BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "10"))
 DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "20"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
-SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "1"))
+SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "6"))
 
 # Noms exacts des colonnes dans la ligne 1 du sheet
 COL_TYPE  = "Type"
@@ -468,21 +468,25 @@ def parse_page(page, type_appareil):
                     prev = p
             hist = "\n".join(lines_hist)
 
-            # Résumé : prix min, max, actuel (ignorer les None/vides)
+            # Résumé : prix min, max, actuel + moyenne (ignorer les None/vides)
             try:
                 float_prices = [(d, float(p)) for d, p in zip(dates, average)
                                 if p and p not in (None, "null", "None", "")]
                 if float_prices:
-                    min_p  = min(float_prices, key=lambda x: x[1])
-                    max_p  = max(float_prices, key=lambda x: x[1])
-                    actuel = float_prices[-1]
+                    min_p   = min(float_prices, key=lambda x: x[1])
+                    max_p   = max(float_prices, key=lambda x: x[1])
+                    actuel  = float_prices[-1]
+                    moyenne = sum(v for _, v in float_prices) / len(float_prices)
                     resume = (
                         f"Prix min : {min_p[1]:.2f} € ({min_p[0]})\n"
                         f"Prix max : {max_p[1]:.2f} € ({max_p[0]})\n"
                         f"Prix actuel : {actuel[1]:.2f} €"
                     )
+                    # Moyenne historique → remplace le prix neuf
+                    prix = f"{moyenne:.2f} €".replace(".", ",")
                 else:
                     resume = "Non trouvé"
+                    # prix reste tel quel (prix neuf scrappé)
             except Exception:
                 resume = "Non trouvé"
         except Exception:
@@ -636,12 +640,40 @@ def process_all():
 
 
 def _write(ws, idx, row_num, values):
+    """
+    Écrit toutes les valeurs en UNE SEULE requête batch
+    pour éviter le quota exceeded de l'API Google Sheets.
+    """
+    if not values:
+        return
+
+    # Trouver la plage min/max des colonnes à écrire
+    col_indices = {col_name: idx[col_name]+1 for col_name in values if col_name in idx}
+    if not col_indices:
+        return
+
+    min_col = min(col_indices.values())
+    max_col = max(col_indices.values())
+
+    # Lire la ligne actuelle pour ne pas écraser les colonnes non concernées
+    row_range = f"{gspread.utils.rowcol_to_a1(row_num, min_col)}:{gspread.utils.rowcol_to_a1(row_num, max_col)}"
+    current = ws.row_values(row_num)
+
+    # Construire la nouvelle ligne
+    new_row = list(current) + [''] * (max_col - len(current))
     for col_name, val in values.items():
         if col_name not in idx: continue
-        col_letter = gspread.utils.rowcol_to_a1(row_num, idx[col_name]+1)
-        ws.update_acell(col_letter, val)
+        col_idx = idx[col_name]  # 0-based
+        if col_idx < len(new_row):
+            new_row[col_idx] = val
+        else:
+            new_row.extend([''] * (col_idx - len(new_row) + 1))
+            new_row[col_idx] = val
 
-    # Coloriage automatique colonne Résumé prix (J)
+    # Écrire toute la plage en une seule requête
+    ws.update(row_range, [new_row[min_col-1:max_col]])
+
+    # Coloriage automatique colonne Résumé prix
     if COL_RESUME in values and COL_RESUME in idx:
         _colorier_resume(ws, idx, row_num, values[COL_RESUME])
 

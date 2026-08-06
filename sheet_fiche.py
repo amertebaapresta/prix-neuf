@@ -517,10 +517,14 @@ def parse_page(page, type_appareil):
                 else:
                     resume = "Non trouvé"
                     # prix reste tel quel (prix neuf scrappé)
-            except Exception:
+            except Exception as _e2:
                 resume = "Non trouvé"
-        except Exception:
+                import traceback as _tb
+                print(f"  ⚠ Erreur calcul moyenne: {_e2}")
+                _tb.print_exc()
+        except Exception as _e1:
             hist = "Non trouvé"
+            print(f"  ⚠ Erreur chartsDef: {_e1}")
 
     return prix, fiche, dims, hist, resume
 
@@ -604,13 +608,16 @@ def process_all():
         type_app = get(COL_TYPE); marque = get(COL_MARQUE); modele = get(COL_MODELE)
         if not marque and not modele: continue
 
-        # Sauter si fiche déjà remplie et non vide
-        fiche_exist = get(COL_FICHE)
-        if fiche_exist and fiche_exist not in ('Non trouvé','Erreur') and not FORCE_REFRESH_ALL: continue
-
         # Sauter si lien déjà "Non trouvé" (machine introuvable sur le site)
         lien_exist = get(COL_LIEN)
         if lien_exist and lien_exist in ('Non trouvé', 'Erreur') and not FORCE_REFRESH_ALL: continue
+
+        # Sauter si fiche ET prix déjà remplis
+        fiche_exist = get(COL_FICHE)
+        prix_exist  = get(COL_PRIX)
+        if (fiche_exist and fiche_exist not in ('Non trouvé','Erreur')
+            and prix_exist and prix_exist not in ('Non trouvé','Erreur')
+            and not FORCE_REFRESH_ALL): continue
 
         mon_tour = (candidat_index % SHARD_COUNT == SHARD_INDEX)
         candidat_index += 1

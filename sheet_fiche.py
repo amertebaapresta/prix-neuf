@@ -95,8 +95,9 @@ def _slug_matches(url, modele):
     # Version normale (sans espaces et tirets)
     norm = re.sub(r"[\s\-]","",modele).upper()
     if norm in url_norm: return True
-    # Version sans caractères spéciaux . / + (comme le site les encode)
-    norm_clean = re.sub(r"[\s\-\.\+/]","",modele).upper()
+    # Version sans point initial + sans caractères spéciaux . / + -
+    norm_clean = re.sub(r"^\.", "", modele)  # supprimer point initial
+    norm_clean = re.sub(r"[\s\-\.\+/]","",norm_clean).upper()
     if norm_clean in url_norm: return True
     # Version avec + → PLUS
     norm_plus = norm_clean.replace("+","PLUS")
@@ -329,6 +330,18 @@ def parse_page(page, type_appareil):
         else:
             lines.append(f"Niveau sonore : {m.group(1)} dB")
 
+        # ── Fallback texte brut (fiche "en cours de préparation") ─────────────
+        # Format : "Capacité de chargement : 6 kg" en texte libre
+        if not any("Capacité" in l for l in lines):
+            m = re.search(r'Capacit[eé] de chargement\s*:\s*([0-9]+)\s*kg', page, re.IGNORECASE)
+            if m: lines.append(f"Capacité : {m.group(1)} kg")
+        if not any("Essorage" in l for l in lines):
+            m = re.search(r'essorage max\s*:\s*([0-9]+)\s*(?:trs?/min|tr/min)', page, re.IGNORECASE)
+            if m: lines.append(f"Essorage : {m.group(1)} tr/min")
+        if not any("Classe" in l for l in lines):
+            m = re.search(r'Classe [eé]nerg[eé]tique\s*:\s*([A-G][+]*)', page, re.IGNORECASE)
+            if m: lines.append(f"Classe énergétique : {m.group(1)}")
+
     elif "lave-vaisselle" in tn or "lave vaisselle" in tn:
         # Capacité : chercher X couverts
         m = re.search(r'<b>([0-9]+)\s*couvert', page, re.IGNORECASE)
@@ -434,7 +447,14 @@ def parse_page(page, type_appareil):
             h, l, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
             dims = f"{l/10:.1f}x{h/10:.1f}x{p/10:.1f} cm"
         else:
-            dims = val  # garder tel quel si format différent
+            dims = val
+
+    # Fallback : format texte brut "Dimensions (H x L x P) : 845 x 597 x 497 mm"
+    if dims == "Non trouvé":
+        m = re.search(r'Dimensions\s*\(H\s*[xX]\s*L\s*[xX]\s*P\)\s*:\s*([0-9]+)\s*[xX]\s*([0-9]+)\s*[xX]\s*([0-9]+)\s*mm', page, re.IGNORECASE)
+        if m:
+            h, l, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            dims = f"{l/10:.1f}x{h/10:.1f}x{p/10:.1f} cm"
 
     fiche = "\n".join(lines) if lines else "Non trouvé"
 
@@ -443,9 +463,15 @@ def parse_page(page, type_appareil):
     hist   = "Non trouvé"
     resume = "Non trouvé"
     # Le site utilise deux formats de dates : MM/YYYY (mensuel) ou DD/MM/YYYY (journalier)
-    m_hist = re.search(r"chartsDef\s*=\s*\'({.*?})\'", page)
-    if not m_hist:
-        m_hist = re.search(r"chartsDef\s*=\s*'({.*?})'", page)
+    # Chercher chartsDef avec différents types d'apostrophes (iso-8859-1 vs utf-8)
+    for _pat in [
+        r"chartsDef\s*=\s*'({.*?})'",           # apostrophe normale
+        r'chartsDef\s*=\s*"({.*?})"',           # guillemets doubles
+        r"chartsDef\s*=\s*.({.*?}).",            # n'importe quel délimiteur
+    ]:
+        m_hist = re.search(_pat, page, re.DOTALL)
+        if m_hist:
+            break
     if m_hist:
         try:
             import json as _json
@@ -486,7 +512,7 @@ def parse_page(page, type_appareil):
                         f"Prix actuel : {actuel[1]:.2f} €"
                     )
                     # Moyenne historique → remplace le prix neuf
-                    prix = f"{moyenne:.2f} €"
+                    prix = f"{moyenne:.2f}".replace(".", ",") + " €"
                 else:
                     resume = "Non trouvé"
                     # prix reste tel quel (prix neuf scrappé)

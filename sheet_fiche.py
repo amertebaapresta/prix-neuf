@@ -701,19 +701,39 @@ def process_all():
 
 
 def _write(ws, idx, row_num, values):
-    """Écrit les valeurs cellule par cellule avec pause pour éviter le quota."""
+    """
+    Écrit toutes les valeurs en UNE SEULE requête batch_update
+    pour minimiser les appels API et éviter le quota 429.
+    """
+    if not values: return
+
+    # Construire la liste de cellules à mettre à jour
+    data = []
     for col_name, val in values.items():
         if col_name not in idx: continue
         col_letter = gspread.utils.rowcol_to_a1(row_num, idx[col_name]+1)
+        data.append({'range': col_letter, 'values': [[val]]})
+
+    if not data: return
+
+    # Une seule requête pour tout écrire
+    retries = 3
+    while retries > 0:
         try:
-            ws.update_acell(col_letter, val)
-            time.sleep(0.5)  # pause anti-quota
+            ws.batch_update(data)
+            break
         except Exception as e:
-            log(f"  ⚠ Erreur écriture {col_name}: {e}")
-            time.sleep(2)
+            if "429" in str(e):
+                log(f"  ⚠ Quota 429 — attente 30s avant retry...")
+                time.sleep(30)
+                retries -= 1
+            else:
+                log(f"  ⚠ Erreur écriture batch: {e}")
+                break
 
     # Coloriage automatique colonne Résumé prix
     if COL_RESUME in values and COL_RESUME in idx:
+        time.sleep(2)
         _colorier_resume(ws, idx, row_num, values[COL_RESUME])
 
 

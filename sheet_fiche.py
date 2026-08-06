@@ -26,7 +26,7 @@ def now_paris(): return datetime.now(PARIS_TZ)
 SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
 WORKSHEET_NAME   = "Copie de Clé unique"
 CREDENTIALS_FILE = "credentials.json"
-FORCE_REFRESH_ALL = False
+FORCE_REFRESH_ALL = True
 BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "10"))
 DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "20"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
@@ -464,12 +464,13 @@ def parse_page(page, type_appareil):
     resume = "Non trouvé"
     # Le site utilise deux formats de dates : MM/YYYY (mensuel) ou DD/MM/YYYY (journalier)
     # Chercher chartsDef avec différents types d'apostrophes (iso-8859-1 vs utf-8)
+    # Chercher chartsDef — utiliser [^']* au lieu de .*? pour éviter les faux positifs
     for _pat in [
-        r"chartsDef\s*=\s*'({.*?})'",           # apostrophe normale
-        r'chartsDef\s*=\s*"({.*?})"',           # guillemets doubles
-        r"chartsDef\s*=\s*.({.*?}).",            # n'importe quel délimiteur
+        r"chartsDef\s*=\s*'({[^']+})'",         # apostrophe normale
+        r'chartsDef\s*=\s*"({[^"]+})"',         # guillemets doubles
+        r"chartsDef\s*=\s*.({\"prices\".*?})[^{]",  # fallback large
     ]:
-        m_hist = re.search(_pat, page, re.DOTALL)
+        m_hist = re.search(_pat, page)
         if m_hist:
             break
     if m_hist:

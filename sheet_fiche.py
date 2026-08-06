@@ -26,7 +26,7 @@ def now_paris(): return datetime.now(PARIS_TZ)
 SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
 WORKSHEET_NAME   = "Copie de Clé unique"
 CREDENTIALS_FILE = "credentials.json"
-FORCE_REFRESH_ALL = True
+FORCE_REFRESH_ALL = False
 BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "10"))
 DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "20"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))

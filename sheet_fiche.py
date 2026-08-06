@@ -486,7 +486,7 @@ def parse_page(page, type_appareil):
                         f"Prix actuel : {actuel[1]:.2f} €"
                     )
                     # Moyenne historique → remplace le prix neuf
-                    prix = f"{moyenne:.2f} €".replace(".", ",")
+                    prix = f"{moyenne:.2f} €"
                 else:
                     resume = "Non trouvé"
                     # prix reste tel quel (prix neuf scrappé)
@@ -510,14 +510,14 @@ def _classe(page, lines):
     m = re.search(r'Classe [eé]nergie\s*:\s*<b>([A-G][+]*)</b>', page, re.IGNORECASE)
     if m:
         v = m.group(1)
-        lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
+        lines.append(f"Classe énergétique : {v}")
         return
 
     # 2. Texte brut dans le résumé : "Classe énergie : A ·" ou "Classe énergie : A<"
     m = re.search(r'Classe [eé]nergie\s*:\s*([A-G][+]*)\s*(?:[·<\n\r])', page, re.IGNORECASE)
     if m:
         v = m.group(1).strip()
-        lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
+        lines.append(f"Classe énergétique : {v}")
         return
 
     # 3. Tableau product-tech
@@ -526,7 +526,7 @@ def _classe(page, lines):
         m2 = re.search(r'([A-G][+]*)', val)
         if m2:
             v = m2.group(1)
-            lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
+            lines.append(f"Classe énergétique : {v}")
             return
 
     # 4. Patterns larges fallback
@@ -537,7 +537,7 @@ def _classe(page, lines):
         m3 = re.search(pat, page, re.IGNORECASE)
         if m3:
             v = m3.group(1)
-            lines.append(f"{"Ancienne" if "+" in v else "Nouvelle"} classe énergétique : {v}")
+            lines.append(f"Classe énergétique : {v}")
             return
 
 
@@ -652,7 +652,13 @@ def process_all():
         except Exception as e:
             log(f"  ✗ Erreur : {e}")
             import traceback; traceback.print_exc()
-            _write(ws, idx, i, {COL_PRIX:"Erreur", COL_FICHE:f"Erreur:{e}"})
+            if "429" in str(e) or "quota" in str(e).lower():
+                # Quota exceeded — ne rien écrire du tout, laisser toute la ligne vide
+                # pour que le prochain run la retraite complètement
+                log(f"  ⏭ Ligne {i} ignorée (quota) — sera retraitée au prochain run")
+            else:
+                # Autre erreur — écrire "Erreur" pour ne pas reboucler indéfiniment
+                _write(ws, idx, i, {COL_PRIX:"Erreur", COL_FICHE:f"Erreur:{e}"})
             traites += 1
 
         time.sleep(DELAY_SECONDS)

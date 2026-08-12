@@ -19,6 +19,32 @@ from zoneinfo import ZoneInfo
 import requests, gspread
 from google.oauth2.service_account import Credentials
 
+# ── cron-job.org API ──────────────────────────────────────────────────────────
+CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "")
+CRONJOB_ID      = os.environ.get("CRONJOB_ID", "")
+
+def desactiver_cronjob():
+    """Désactive le cronjob cron-job.org quand tout est traité."""
+    if not CRONJOB_API_KEY or not CRONJOB_ID:
+        log("⚠ CRONJOB_API_KEY ou CRONJOB_ID manquant — désactivation ignorée")
+        return
+    try:
+        r = requests.patch(
+            f"https://api.cron-job.org/jobs/{CRONJOB_ID}",
+            headers={
+                "Authorization": f"Bearer {CRONJOB_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"job": {"enabled": False}},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            log("✅ Cronjob désactivé automatiquement — scraping terminé !")
+        else:
+            log(f"⚠ Erreur désactivation cronjob : HTTP {r.status_code} — {r.text}")
+    except Exception as e:
+        log(f"⚠ Erreur désactivation cronjob : {e}")
+
 PARIS_TZ = ZoneInfo("Europe/Paris")
 def now_paris(): return datetime.now(PARIS_TZ)
 
@@ -698,6 +724,35 @@ def process_all():
         time.sleep(DELAY_SECONDS)
 
     log(f"Terminé — {traites} lignes." + (" (rate-limit)" if arret else ""))
+
+    # ── Vérifier si tout est traité → désactiver le cronjob ──────────────────
+    if not arret and SHARD_INDEX == 0:
+        # Seulement le shard 0 fait cette vérification
+        ws2       = get_worksheet()
+        all_vals  = ws2.get_all_values()
+        header2   = all_vals[0]
+        idx2      = {name: i for i, name in enumerate(header2)}
+        restantes = 0
+        for row in all_vals[1:]:
+            def g2(col):
+                j = idx2.get(col)
+                return row[j].strip() if j is not None and j < len(row) else ""
+            marque2 = g2(COL_MARQUE)
+            modele2 = g2(COL_MODELE)
+            if not marque2 and not modele2: continue
+            lien2   = g2(COL_LIEN)
+            fiche2  = g2(COL_FICHE)
+            prix2   = g2(COL_PRIX)
+            # Compter les lignes encore à traiter
+            if lien2 in ('Non trouvé', 'Erreur'): continue
+            fiche_ok2 = fiche2 and fiche2 not in ('Non trouvé', 'Erreur')
+            prix_ok2  = prix2  and prix2  not in ('Non trouvé', 'Erreur')
+            if not (fiche_ok2 and prix_ok2):
+                restantes += 1
+        log(f"Lignes restantes à traiter : {restantes}")
+        if restantes == 0:
+            log("🎉 Toutes les machines sont traitées !")
+            desactiver_cronjob()
 
 
 def _write(ws, idx, row_num, values):

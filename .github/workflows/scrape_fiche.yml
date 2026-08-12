@@ -1,7 +1,7 @@
 name: Murfy — Fiche Technique
 
 on:
-  workflow_dispatch: {}  # Déclenché uniquement via cron-job.org (API GitHub)
+  workflow_dispatch: {}  # Déclenché uniquement via cron-job.org
 
 jobs:
   maj-fiche:
@@ -28,9 +28,11 @@ jobs:
 
       - name: Lancer le script fiche technique (shard ${{ matrix.shard }})
         env:
-          SHEET_ID_FICHE: ${{ secrets.SHEET_ID_FICHE }}
-          SHARD_INDEX:    ${{ matrix.shard }}
-          SHARD_COUNT:    "6"
-          BATCH_LIMIT:    "10"
-          DELAY_SECONDS:  "20"
+          SHEET_ID_FICHE:  ${{ secrets.SHEET_ID_FICHE }}
+          SHARD_INDEX:     ${{ matrix.shard }}
+          SHARD_COUNT:     "6"
+          BATCH_LIMIT:     "10"
+          DELAY_SECONDS:   "20"
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          CRONJOB_ID:      ${{ secrets.CRONJOB_ID }}
         run: python sheet_fiche.py

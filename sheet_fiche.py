@@ -421,7 +421,7 @@ def parse_page(page, type_appareil):
         _pose(page, lines)
         _ean(page, lines)
 
-    elif "four" in tn or "cuisini" in tn or "micro" in tn:
+    elif "four" in tn or "cuisini" in tn or "micro" in tn or "table" in tn or "hotte" in tn:
         val = _tech(page, r'Type de cuisson')
         if not val: val = _tech(page, r'Fonctionnement')
         if val:

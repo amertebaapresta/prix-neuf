@@ -1,0 +1,14 @@
+name: Check IP
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - name: Afficher l'IP publique (shard ${{ matrix.shard }})
+        run: curl -s https://api.ipify.org && echo ""

@@ -367,6 +367,9 @@ def parse_page(page, type_appareil):
         if not any("Classe" in l for l in lines):
             m = re.search(r'Classe [eé]nerg[eé]tique\s*:\s*([A-G][+]*)', page, re.IGNORECASE)
             if m: lines.append(f"Classe énergétique : {m.group(1)}")
+        _ouverture(page, lines)
+        _pose(page, lines)
+        _ean(page, lines)
 
     elif "lave-vaisselle" in tn or "lave vaisselle" in tn:
         # Capacité : chercher X couverts
@@ -384,6 +387,8 @@ def parse_page(page, type_appareil):
         if val:
             m2 = re.search(r'([0-9]+[.,]?[0-9]*)\s*[lL]', val)
             if m2: lines.append(f"Consommation eau : {m2.group(1)} L/cycle")
+        _pose(page, lines)
+        _ean(page, lines)
 
     elif any(x in tn for x in ["seche-linge","sèche-linge","seche linge","sèche linge"]):
         # Type de séchage dans le tableau
@@ -412,6 +417,9 @@ def parse_page(page, type_appareil):
         m = re.search(r'Niveau sonore max\s*:\s*<b>([0-9]+)\s*dB</b>', page, re.IGNORECASE)
         if not m: m = re.search(r'<b>([0-9]+)\s*dB</b>', page, re.IGNORECASE)
         if m: lines.append(f"Niveau sonore : {m.group(1)} dB")
+        _ouverture(page, lines)
+        _pose(page, lines)
+        _ean(page, lines)
 
     elif "four" in tn or "cuisini" in tn or "micro" in tn:
         val = _tech(page, r'Type de cuisson')
@@ -431,6 +439,8 @@ def parse_page(page, type_appareil):
             if m2: lines.append(f"Capacité : {m2.group(1)} L")
 
         _classe(page, lines)
+        _pose(page, lines)
+        _ean(page, lines)
 
     elif any(x in tn for x in ["réfrigérateur","refrigerateur","frigo"]):
         val = _tech(page, r'Type de froid')
@@ -453,6 +463,8 @@ def parse_page(page, type_appareil):
         m = re.search(r'Niveau sonore max\s*:\s*<b>([0-9]+)\s*dB</b>', page, re.IGNORECASE)
         if not m: m = re.search(r'<b>([0-9]+)\s*dB</b>', page, re.IGNORECASE)
         if m: lines.append(f"Niveau sonore : {m.group(1)} dB")
+        _pose(page, lines)
+        _ean(page, lines)
 
     elif any(x in tn for x in ["congélateur","congelateur"]):
         val = _tech(page, r'Capacit[eé]')
@@ -695,12 +707,14 @@ def process_all():
         lien_exist = get(COL_LIEN)
         if lien_exist and lien_exist in ('Non trouvé', 'Erreur') and not FORCE_REFRESH_ALL: continue
 
-        # Sauter si fiche ET prix déjà remplis
+        # Sauter si fiche ET prix déjà remplis ET fiche contient les nouvelles infos
         fiche_exist = get(COL_FICHE)
         prix_exist  = get(COL_PRIX)
-        if (fiche_exist and fiche_exist not in ('Non trouvé','Erreur')
-            and prix_exist and prix_exist not in ('Non trouvé','Erreur')
-            and not FORCE_REFRESH_ALL): continue
+        fiche_ok = fiche_exist and fiche_exist not in ('Non trouvé', 'Erreur')
+        prix_ok  = prix_exist  and prix_exist  not in ('Non trouvé', 'Erreur')
+        # Retraiter si fiche incomplète (sans EAN, Pose ou Ouverture)
+        fiche_complete = fiche_ok and any(x in fiche_exist for x in ['EAN', 'Type de pose', 'Ouverture'])
+        if fiche_complete and prix_ok and not FORCE_REFRESH_ALL: continue
 
         mon_tour = (candidat_index % SHARD_COUNT == SHARD_INDEX)
         candidat_index += 1

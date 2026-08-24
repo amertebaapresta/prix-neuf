@@ -443,6 +443,24 @@ def parse_page(page, type_appareil):
         _ean(page, lines)
 
     elif any(x in tn for x in ["réfrigérateur","refrigerateur","frigo"]):
+        # Type de réfrigérateur depuis les <li> du résumé
+        m_type = re.search(r'<li>((?:Réfrigérateur|R\xe9frig\xe9rateur)[^<]{5,120})</li>', page)
+        if m_type:
+            val_type = re.sub(r'<[^>]+>', '', m_type.group(1)).strip()
+            for mot, label in [
+                ("américain","Réfrigérateur américain"),
+                ("multi-portes","Réfrigérateur multi-portes"),
+                ("combiné","Réfrigérateur combiné"),
+                ("combine","Réfrigérateur combiné"),
+                ("armoire","Congélateur armoire"),
+                ("coffre","Congélateur coffre"),
+                ("cave","Cave à vin"),
+            ]:
+                if mot in val_type.lower():
+                    lines.append(f"Type : {label}")
+                    break
+
+        # Type de froid
         val = _tech(page, r'Type de froid')
         if val:
             lines.append(f"Type de froid : {val}")
@@ -452,11 +470,23 @@ def parse_page(page, type_appareil):
                     lines.append(f"Type de froid : {label}")
                     break
 
-        val = _tech(page, r'Capacit[eé] totale')
-        if not val: val = _tech(page, r'Capacit[eé]')
-        if val:
-            m2 = re.search(r'([0-9]+)\s*[Ll]', val)
-            if m2: lines.append(f"Capacité totale : {m2.group(1)} L")
+        # Capacité : d'abord Volume net total (avec détail réfrig/congél)
+        m_vol = re.search(
+            r'Volume net total\s*:\s*(\d+)\s*L\s*\(R[eé]frig[eé]rateur\s*:\s*(\d+)\s*L\s*/\s*Cong[eé]lateur\s*:\s*(\d+)\s*L\)',
+            page, re.IGNORECASE
+        )
+        if m_vol:
+            lines.append(f"Capacité totale : {m_vol.group(1)} L")
+            lines.append(f"  → Réfrigérateur : {m_vol.group(2)} L")
+            lines.append(f"  → Congélateur : {m_vol.group(3)} L")
+        else:
+            # Fallback tableau
+            val = _tech(page, r'Volume net total')
+            if not val: val = _tech(page, r'Capacit[eé] totale')
+            if not val: val = _tech(page, r'Capacit[eé]')
+            if val:
+                m2 = re.search(r'(\d+)\s*[Ll]', val)
+                if m2: lines.append(f"Capacité totale : {m2.group(1)} L")
 
         _classe(page, lines)
 

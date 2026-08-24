@@ -49,7 +49,7 @@ PARIS_TZ = ZoneInfo("Europe/Paris")
 def now_paris(): return datetime.now(PARIS_TZ)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "1MK6TiPQZUX4IwoYzfVB4Ofo1fFbUm_5qitsrpIjJps0")
+SHEET_ID         = os.environ.get("SHEET_ID_FICHE", "")
 WORKSHEET_NAME   = "Clé unique"
 CREDENTIALS_FILE = "credentials.json"
 FORCE_REFRESH_ALL = False
@@ -709,6 +709,13 @@ def get_worksheet():
 
 # ── Boucle principale ─────────────────────────────────────────────────────────
 def process_all():
+    # Délai de démarrage échelonné pour éviter que les 6 shards
+    # frappent le site en même temps → réduit le risque de 403
+    import random
+    delai_demarrage = SHARD_INDEX * 30 + random.randint(0, 15)
+    log(f"Délai de démarrage : {delai_demarrage}s (shard {SHARD_INDEX})")
+    time.sleep(delai_demarrage)
+
     ws         = get_worksheet()
     all_values = ws.get_all_values()
     if not all_values: log("Feuille vide."); return

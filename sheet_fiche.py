@@ -570,40 +570,46 @@ def _ean(page, lines):
 
 
 def _pose(page, lines):
-    """Extrait le type de pose (Libre, Encastrable, Intégrable)."""
-    m = re.search(
-        r'Pose(?:\s*/\s*Installation)?\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<div[^>]*>)?\s*(?:<b>)?([^<\n]{3,50})',
-        page, re.IGNORECASE
-    )
-    if m:
-        val = re.sub(r'<[^>]+>', '', m.group(1)).strip()
-        val_low = val.lower()
-        if 'encastr' in val_low:
-            lines.append("Type de pose : Encastrable")
-        elif 'int\xe9gr' in val_low or 'integr' in val_low:
-            lines.append("Type de pose : Int\xe9grable")
-        elif 'libre' in val_low:
-            lines.append("Type de pose : Pose libre")
-        else:
-            lines.append(f"Type de pose : {val[:50]}")
+    val = None
+    for pat in [
+        r"Type de pose\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<b>)?([^<\n]{3,60})",
+        r"Pose\s*/\s*Installation\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<div[^>]*>)?\s*(?:<b>)?([^<\n]{3,60})",
+        r"Pose\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<div[^>]*>)?\s*(?:<b>)?([^<\n]{3,60})",
+    ]:
+        m = re.search(pat, page, re.IGNORECASE)
+        if m:
+            val = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            break
+    if not val:
+        m = re.search(r"<li>[^<]*(pose libre|encastrable|int[eé]grable)[^<]*</li>", page, re.IGNORECASE)
+        if m: val = m.group(1).strip()
+    if val:
+        v = val.lower()
+        if "encastr" in v: lines.append("Type de pose : Encastrable")
+        elif "intégr" in v or "integr" in v: lines.append("Type de pose : Intégrable")
+        elif "libre" in v: lines.append("Type de pose : Pose libre")
+        else: lines.append(f"Type de pose : {val[:50]}")
 
 
 def _ouverture(page, lines):
-    """Extrait le type d'ouverture (Frontale, Par le haut)."""
-    m = re.search(
-        r'Ouverture\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*([^<\n]{3,60})',
-        page, re.IGNORECASE
-    )
-    if not m:
-        m = re.search(r'[Oo]uverture\s*(?:par le|)\s*(haut|frontale?|dessus)', page, re.IGNORECASE)
-    if m:
-        val = m.group(1).strip().lower()
-        if 'haut' in val or 'dessus' in val:
-            lines.append("Ouverture : Par le haut")
-        elif 'front' in val:
-            lines.append("Ouverture : Frontale")
-        else:
-            lines.append(f"Ouverture : {m.group(1).strip()[:50]}")
+    val = None
+    for pat in [
+        r"Type de chargement\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<b>)?([^<\n]{3,60})",
+        r"Type d.ouverture\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<b>)?([^<\n]{3,60})",
+        r"Ouverture\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*([^<\n]{3,60})",
+    ]:
+        m = re.search(pat, page, re.IGNORECASE)
+        if m:
+            val = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            break
+    if not val:
+        m = re.search(r"[Cc]hargement\s+(?:par le\s+)?(dessus|haut|frontal\w*|hublot)", page, re.IGNORECASE)
+        if m: val = m.group(1).strip()
+    if val:
+        v = val.lower()
+        if any(x in v for x in ["dessus", "haut", "top"]): lines.append("Ouverture : Par le haut")
+        elif any(x in v for x in ["frontal", "hublot", "avant"]): lines.append("Ouverture : Frontale")
+        else: lines.append(f"Ouverture : {val[:50]}")
 
 
 def _classe(page, lines):

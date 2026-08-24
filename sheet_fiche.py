@@ -555,6 +555,57 @@ def parse_page(page, type_appareil):
     return prix, fiche, dims, hist, resume
 
 
+def _ean(page, lines):
+    """Extrait le numéro EAN/UPC."""
+    # Format 1 : "EAN et/ou UPC) : MODELE (1234567890123)"
+    m = re.search(r'EAN[^<]*</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:[A-Z0-9\-\./ ]+\s*\()?(\d{8,13})\)?', page)
+    if not m:
+        # Format 2 : juste le numéro entre parenthèses après la référence
+        m = re.search(r'EAN[^<]*</div>\s*<div[^>]*product-tech-text[^>]*>[^(]*\((\d{8,13})\)', page)
+    if not m:
+        # Format 3 : numéro EAN seul (13 chiffres)
+        m = re.search(r'product-tech-text[^>]*>\s*(\d{13})<', page)
+    if m:
+        lines.append(f"EAN : {m.group(1)}")
+
+
+def _pose(page, lines):
+    """Extrait le type de pose (Libre, Encastrable, Intégrable)."""
+    m = re.search(
+        r'Pose(?:\s*/\s*Installation)?\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*(?:<div[^>]*>)?\s*(?:<b>)?([^<\n]{3,50})',
+        page, re.IGNORECASE
+    )
+    if m:
+        val = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+        val_low = val.lower()
+        if 'encastr' in val_low:
+            lines.append("Type de pose : Encastrable")
+        elif 'int\xe9gr' in val_low or 'integr' in val_low:
+            lines.append("Type de pose : Int\xe9grable")
+        elif 'libre' in val_low:
+            lines.append("Type de pose : Pose libre")
+        else:
+            lines.append(f"Type de pose : {val[:50]}")
+
+
+def _ouverture(page, lines):
+    """Extrait le type d'ouverture (Frontale, Par le haut)."""
+    m = re.search(
+        r'Ouverture\s*:\s*\n?</div>\s*<div[^>]*product-tech-text[^>]*>\s*([^<\n]{3,60})',
+        page, re.IGNORECASE
+    )
+    if not m:
+        m = re.search(r'[Oo]uverture\s*(?:par le|)\s*(haut|frontale?|dessus)', page, re.IGNORECASE)
+    if m:
+        val = m.group(1).strip().lower()
+        if 'haut' in val or 'dessus' in val:
+            lines.append("Ouverture : Par le haut")
+        elif 'front' in val:
+            lines.append("Ouverture : Frontale")
+        else:
+            lines.append(f"Ouverture : {m.group(1).strip()[:50]}")
+
+
 def _classe(page, lines):
     """
     Extrait la classe énergie.

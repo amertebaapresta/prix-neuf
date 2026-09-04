@@ -283,8 +283,8 @@ def _write_row(ws, idx, row_num, values):
 
 # ── Boucle principale (worker pool) ──────────────────────────────────────────
 def process_all():
-    # Délai aléatoire pour éviter que tous les workers démarrent en même temps
-    delai = random.randint(0, 60)
+    # Délai aléatoire pour étaler les lectures Google Sheets
+    delai = random.randint(SHARD_INDEX * 15, SHARD_INDEX * 15 + 30)
     log(f"Délai démarrage : {delai}s (shard {SHARD_INDEX})")
     time.sleep(delai)
 

@@ -51,7 +51,17 @@ _SESSION_INIT = False
 def _init_session():
     global _SESSION_INIT
     if not _SESSION_INIT:
-        SESSION.get("https://www.electromenager-compare.com/", headers=HEADERS_HTTP, timeout=15)
+        try:
+            # Pause initiale pour laisser le temps au site de "oublier"
+            # les requêtes récentes depuis cette IP
+            time.sleep(10)
+            r = SESSION.get("https://www.electromenager-compare.com/", headers=HEADERS_HTTP, timeout=15)
+            if r.status_code == 403:
+                raise RateLimitError("403 sur session initiale")
+        except RateLimitError:
+            raise
+        except Exception:
+            pass
         _SESSION_INIT = True
 
 class RateLimitError(Exception): pass

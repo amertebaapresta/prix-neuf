@@ -7,6 +7,10 @@ jobs:
   maj-prix:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@v4
@@ -22,11 +26,11 @@ jobs:
       - name: Reconstituer le fichier credentials.json depuis le secret
         run: echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" | base64 -d > credentials.json
 
-      - name: Lancer le script de mise à jour des prix
+      - name: Lancer le script (shard ${{ matrix.shard }})
         env:
           SHEET_ID: ${{ secrets.SHEET_ID }}
-          SHARD_INDEX: 0
-          SHARD_COUNT: 1
-          BATCH_LIMIT: 30
-          DELAY_SECONDS: 20
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: "6"
+          BATCH_LIMIT: "5"
+          DELAY_SECONDS: "20"
         run: python sheet_prix.py

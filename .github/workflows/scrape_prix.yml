@@ -6,11 +6,11 @@ on:
 jobs:
   maj-prix:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
     steps:
       - name: Checkout du dépôt
         uses: actions/checkout@v4
@@ -30,7 +30,6 @@ jobs:
         env:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_COUNT: "6"
-          BATCH_LIMIT: "5"
+          BATCH_LIMIT: "2"
           DELAY_SECONDS: "20"
         run: python sheet_prix.py

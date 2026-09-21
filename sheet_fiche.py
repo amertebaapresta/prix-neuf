@@ -59,8 +59,15 @@ SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
 SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "6"))
 
 # Proxy WebShare rotatif (IP résidentielle) — fallback sur IP directe si absent
-WEBSHARE_PROXY = os.environ.get("WEBSHARE_PROXY", "")
-PROXY_CONF = {"http": WEBSHARE_PROXY, "https": WEBSHARE_PROXY} if WEBSHARE_PROXY else None
+import random as _random
+_WEBSHARE_RAW = os.environ.get("WEBSHARE_PROXY", "")
+PROXY_LIST = [p.strip() for p in _WEBSHARE_RAW.split(",") if p.strip()] if _WEBSHARE_RAW else []
+
+def _get_proxy_conf():
+    if not PROXY_LIST:
+        return None
+    proxy = _random.choice(PROXY_LIST)
+    return {"http": proxy, "https": proxy}
 
 # Noms exacts des colonnes dans la ligne 1 du sheet
 COL_TYPE  = "Type"
@@ -91,8 +98,9 @@ def _init_session():
     if not _SESSION_INIT:
         try:
             kwargs = {"headers": HEADERS_HTTP, "timeout": 15}
-            if PROXY_CONF:
-                kwargs["proxies"] = PROXY_CONF
+            proxy = _get_proxy_conf()
+            if proxy:
+                kwargs["proxies"] = proxy
             r = SESSION.get("https://www.electromenager-compare.com/", **kwargs)
             if r.status_code == 403:
                 raise RateLimitError("403 sur session initiale")
@@ -105,15 +113,17 @@ def _init_session():
 class RateLimitError(Exception): pass
 
 def _post_or_stop(url, **kwargs):
-    if PROXY_CONF:
-        kwargs["proxies"] = PROXY_CONF
+    proxy = _get_proxy_conf()
+    if proxy:
+        kwargs["proxies"] = proxy
     r = SESSION.post(url, **kwargs)
     if r.status_code == 403: raise RateLimitError("403")
     return r
 
 def _get_or_stop(url, **kwargs):
-    if PROXY_CONF:
-        kwargs["proxies"] = PROXY_CONF
+    proxy = _get_proxy_conf()
+    if proxy:
+        kwargs["proxies"] = proxy
     r = SESSION.get(url, **kwargs)
     if r.status_code == 403: raise RateLimitError("403")
     return r

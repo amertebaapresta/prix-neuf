@@ -1,7 +1,7 @@
 name: Murfy — Fiche Technique
 
 on:
-  workflow_dispatch: {}  # Déclenché uniquement via cron-job.org
+  workflow_dispatch: {}
 
 jobs:
   maj-fiche:
@@ -35,4 +35,5 @@ jobs:
           DELAY_SECONDS:   "20"
           CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
           CRONJOB_ID:      ${{ secrets.CRONJOB_ID }}
+          WEBSHARE_PROXY:  ${{ secrets.WEBSHARE_PROXY }}
         run: python sheet_fiche.py

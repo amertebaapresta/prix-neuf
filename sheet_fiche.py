@@ -110,16 +110,24 @@ class RateLimitError(Exception): pass
 def _post_or_stop(url, **kwargs):
     if PROXY_CONF:
         kwargs["proxies"] = PROXY_CONF
-    r = SESSION.post(url, **kwargs)
-    if r.status_code == 403: raise RateLimitError("403")
-    return r
+    for attempt in range(5):
+        r = SESSION.post(url, **kwargs)
+        if r.status_code != 403:
+            return r
+        log(f"  ⚠ 403 — nouvelle IP WebShare (tentative {attempt+1}/5)")
+        time.sleep(3)
+    raise RateLimitError("403 — 5 tentatives épuisées")
 
 def _get_or_stop(url, **kwargs):
     if PROXY_CONF:
         kwargs["proxies"] = PROXY_CONF
-    r = SESSION.get(url, **kwargs)
-    if r.status_code == 403: raise RateLimitError("403")
-    return r
+    for attempt in range(5):
+        r = SESSION.get(url, **kwargs)
+        if r.status_code != 403:
+            return r
+        log(f"  ⚠ 403 — nouvelle IP WebShare (tentative {attempt+1}/5)")
+        time.sleep(3)
+    raise RateLimitError("403 — 5 tentatives épuisées")
 
 def _decode(r):
     try: return r.content.decode("iso-8859-1")

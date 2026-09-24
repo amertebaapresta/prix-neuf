@@ -58,6 +58,10 @@ DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "30"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
 SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "6"))
 
+# Proxy WebShare Rotating Residential
+_WEBSHARE_RAW = os.environ.get("WEBSHARE_PROXY", "")
+PROXY_CONF = {"http": _WEBSHARE_RAW, "https": _WEBSHARE_RAW} if _WEBSHARE_RAW else None
+
 # Proxy WebShare Rotating Residential — une seule URL, WebShare change l'IP automatiquement
 _WEBSHARE_RAW = os.environ.get("WEBSHARE_PROXY", "")
 PROXY_CONF = {"http": _WEBSHARE_RAW, "https": _WEBSHARE_RAW} if _WEBSHARE_RAW else None
@@ -97,10 +101,6 @@ def _init_session():
             if PROXY_CONF:
                 kwargs["proxies"] = PROXY_CONF
             r = SESSION.get("https://www.electromenager-compare.com/", **kwargs)
-            if r.status_code == 403:
-                raise RateLimitError("403 sur session initiale")
-        except RateLimitError:
-            raise
         except Exception:
             pass
         _SESSION_INIT = True

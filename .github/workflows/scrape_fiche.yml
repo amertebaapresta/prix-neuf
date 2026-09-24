@@ -31,8 +31,8 @@ jobs:
           SHEET_ID_FICHE:  ${{ secrets.SHEET_ID_FICHE }}
           SHARD_INDEX:     ${{ matrix.shard }}
           SHARD_COUNT:     "6"
-          BATCH_LIMIT:     "10"
-          DELAY_SECONDS:   "20"
+          BATCH_LIMIT:     "34"
+          DELAY_SECONDS:   "30"
           CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
           CRONJOB_ID:      ${{ secrets.CRONJOB_ID }}
           WEBSHARE_PROXY:  ${{ secrets.WEBSHARE_PROXY }}

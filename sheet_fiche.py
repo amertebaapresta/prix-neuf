@@ -54,7 +54,7 @@ WORKSHEET_NAME   = "Clé unique"
 CREDENTIALS_FILE = "credentials.json"
 FORCE_REFRESH_ALL = False
 BATCH_LIMIT      = int(os.environ.get("BATCH_LIMIT",    "34"))
-DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "20"))
+DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "30"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
 SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "6"))
 

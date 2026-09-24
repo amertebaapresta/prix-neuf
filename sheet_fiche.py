@@ -58,18 +58,23 @@ DELAY_SECONDS    = float(os.environ.get("DELAY_SECONDS", "20"))
 SHARD_INDEX      = int(os.environ.get("SHARD_INDEX",    "0"))
 SHARD_COUNT      = int(os.environ.get("SHARD_COUNT",    "6"))
 
-# Proxies WebShare — liste séparée par des virgules dans le secret WEBSHARE_PROXY
-# Chaque requête vers le site choisit un proxy aléatoire dans la liste
-# Si WEBSHARE_PROXY est vide, on utilise l'IP directe de GitHub (fallback)
 import random as _random
 _WEBSHARE_RAW = os.environ.get("WEBSHARE_PROXY", "")
 PROXY_LIST = [p.strip() for p in _WEBSHARE_RAW.split(",") if p.strip()] if _WEBSHARE_RAW else []
+_blocked_proxies = set()  # proxies qui ont reçu un 403 ce run
 
 def _get_proxy_conf():
-    """Retourne un proxy aléatoire de la liste WebShare, ou None (IP directe)."""
-    if not PROXY_LIST:
+    """Retourne un proxy disponible (non bloqué), ou None (IP directe)."""
+    available = [p for p in PROXY_LIST if p not in _blocked_proxies]
+    if not available:
         return None
-    return _random.choice(PROXY_LIST)
+    return _random.choice(available)
+
+def _mark_proxy_blocked(proxy_conf):
+    """Marque un proxy comme bloqué pour ce run."""
+    if proxy_conf and "http" in proxy_conf:
+        _blocked_proxies.add(proxy_conf["http"])
+        log(f"  ⚠ Proxy bloqué retiré ({len(_blocked_proxies)}/{len(PROXY_LIST)} hors service)")
 
 # Noms exacts des colonnes dans la ligne 1 du sheet
 COL_TYPE  = "Type"
@@ -115,19 +120,39 @@ def _init_session():
 class RateLimitError(Exception): pass
 
 def _post_or_stop(url, **kwargs):
-    proxy = _get_proxy_conf()
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
-        log(f"  → Proxy: {proxy.split('@')[1] if '@' in proxy else proxy}")
-    r = SESSION.post(url, **kwargs)
+    max_attempts = max(1, len(PROXY_LIST)) + 1
+    for attempt in range(max_attempts):
+        proxy_conf = _get_proxy_conf()
+        kw = dict(kwargs)
+        if proxy_conf:
+            kw["proxies"] = {"http": proxy_conf, "https": proxy_conf}
+            log(f"  → Proxy: {proxy_conf.split('@')[1] if '@' in proxy_conf else proxy_conf}")
+        r = SESSION.post(url, **kw)
+        if r.status_code == 403:
+            if proxy_conf:
+                _mark_proxy_blocked({"http": proxy_conf})
+                continue  # réessaie avec un autre proxy
+            raise RateLimitError("403 sans proxy — IP GitHub bloquée")
+        return r
+    raise RateLimitError("403 — tous les proxies épuisés")
     if r.status_code == 403: raise RateLimitError("403")
     return r
 
 def _get_or_stop(url, **kwargs):
-    proxy = _get_proxy_conf()
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
-    r = SESSION.get(url, **kwargs)
+    max_attempts = max(1, len(PROXY_LIST)) + 1
+    for attempt in range(max_attempts):
+        proxy_conf = _get_proxy_conf()
+        kw = dict(kwargs)
+        if proxy_conf:
+            kw["proxies"] = {"http": proxy_conf, "https": proxy_conf}
+        r = SESSION.get(url, **kw)
+        if r.status_code == 403:
+            if proxy_conf:
+                _mark_proxy_blocked({"http": proxy_conf})
+                continue
+            raise RateLimitError("403 sans proxy — IP GitHub bloquée")
+        return r
+    raise RateLimitError("403 — tous les proxies épuisés")
     if r.status_code == 403: raise RateLimitError("403")
     return r
 

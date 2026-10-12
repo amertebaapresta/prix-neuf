@@ -845,7 +845,8 @@ def process_all():
             log(f"  ✓ Ligne {i} OK")
 
         except RateLimitError:
-            log("  ⛔ 403 — ARRÊT IMMÉDIAT."); arret = True; break
+            log("  ⛔ 403 — proxy épuisé sur cette référence, passage à la suivante")
+            traites += 1
         except Exception as e:
             log(f"  ✗ Erreur : {e}")
             import traceback; traceback.print_exc()

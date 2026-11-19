@@ -1,0 +1,45 @@
+name: Test prix TEST1
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: "Nombre de machines à traiter"
+        required: false
+        default: "15"
+      delay_seconds:
+        description: "Délai entre chaque machine (secondes)"
+        required: false
+        default: "5"
+
+jobs:
+  maj-prix-test1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0]   # 1 seul shard pour le test (toutes les 18 machines)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write credentials
+        run: echo "${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}" | base64 -d > credentials.json
+
+      - name: Run sheet_prix_test1.py
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: "1"
+          BATCH_LIMIT: ${{ github.event.inputs.batch_limit || '15' }}
+          DELAY_SECONDS: ${{ github.event.inputs.delay_seconds || '5' }}
+          WEBSHARE_PROXY: ${{ secrets.WEBSHARE_PROXY }}
+        run: python sheet_prix_test1.py

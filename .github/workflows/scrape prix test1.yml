@@ -32,7 +32,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write credentials
-        run: echo "${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}" | base64 -d > credentials.json
+        run: echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" | base64 -d > credentials.json
 
       - name: Run sheet_prix_test1.py
         env:
